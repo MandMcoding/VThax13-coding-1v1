@@ -1,13 +1,33 @@
-import { Routes, Route, Link } from "react-router-dom";
+import { Routes, Route, Link, useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+
 import HomePage from "./components/home.jsx";
 import CompetePage from "./compete/compete.jsx";
 import SignupPage from "./components/Signup.jsx";
 import LoginPage from "./components/Login.jsx";
 import MCQPage from "./components/mcq.jsx";
+
 import logo from "./assets/logo.png";
 import "./components/home.css"; // reuse navbar styles
 
 export default function App() {
+  const [username, setUsername] = useState(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const storedUser = localStorage.getItem("username");
+    if (storedUser) {
+      setUsername(storedUser);
+    }
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem("username");
+    localStorage.removeItem("token"); // if stored
+    setUsername(null);
+    navigate("/login");
+  };
+
   return (
     <div className="app-container">
       {/* Global Navbar */}
@@ -20,8 +40,18 @@ export default function App() {
         <div className="navbar-links">
           <Link to="/compete">How Does It Work?</Link>
           <Link to="/#faq">FAQ</Link>
-          <Link to="/login" className="nav-link">Log In</Link>
-          <Link to="/signup" className="btn-signup">Sign Up</Link>
+
+          {username ? (
+            <>
+              <span style={{ marginRight: "10px" }}>👋 Hello, {username}</span>
+              <button onClick={handleLogout} className="btn-signup">Log Out</button>
+            </>
+          ) : (
+            <>
+              <Link to="/login" className="nav-link">Log In</Link>
+              <Link to="/signup" className="btn-signup">Sign Up</Link>
+            </>
+          )}
         </div>
       </nav>
 
