@@ -1,5 +1,5 @@
 import "./home.css";
-import logo from "../assets/logo.png"; // your logo here
+import logo from "../assets/logo.png";
 
 export default function HomePage() {
   return (
@@ -26,7 +26,7 @@ export default function HomePage() {
           climb the <em>leaderboard</em>
         </h1>
         <p className="hero-subtitle">
-          CodeComp makes coding practice exciting. Face off in fast-paced matches, 
+          CodeComp makes coding practice exciting. Face off in fast-paced matches,
           sharpen your problem-solving, and rise through the ranks.
         </p>
         <div className="hero-buttons">
