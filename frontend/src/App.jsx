@@ -3,13 +3,22 @@ import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import './App.css'
 import { Routes, Route, Link } from 'react-router-dom'
-import competePage from './compete/page.jsx'
+import CompetePage from './compete/page.jsx'
 
 function App() {
   const [count, setCount] = useState(0)
 
   return (
     <>
+      <div>
+        <nav>
+          <Link to="/compete">Compete</Link>
+        </nav>
+
+        <Routes>
+          <Route path="/compete" element={<CompetePage />} />
+        </Routes>
+      </div>
       <div>
         <a href="https://vite.dev" target="_blank">
           <img src={viteLogo} className="logo" alt="Vite logo" />
