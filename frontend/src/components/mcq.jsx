@@ -1,4 +1,5 @@
 import './mcq.css'
+import { Routes, Route, Link } from "react-router-dom";
 
 export default function MCQPage() {
     return (
@@ -11,9 +12,9 @@ export default function MCQPage() {
                 <p1 className="mcq-paragraph">
                     Waiting for a Match...
                 </p1>
-                <h2 className="mcq-return">
-                    Return
-                </h2>
+                <Link to="/compete" className="mcq-return">
+                    Return 
+                </Link>
             </header>
         </div>
     )

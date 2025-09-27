@@ -69,4 +69,7 @@
     max-width: 700px;
     line-height: 1.0;
     justify-content: left;
+    position: absolute;
+    top:150px;
+    left:50px;
 }
