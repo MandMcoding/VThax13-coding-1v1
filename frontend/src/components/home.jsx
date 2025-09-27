@@ -1,7 +1,9 @@
 import "./home.css";
+import { Link } from "react-router-dom";
 
 export default function HomePage() {
   return (
+    
     <div className="home-wrapper">
       {/* Hero Section */}
       <header className="hero">
