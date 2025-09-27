@@ -8,13 +8,34 @@ This is the start of something beautiful. Our VT hacks 13 project, with Salif, A
 python version 
 
 ### Backend
+cd backend
+python -m venv venv
+.\venv\Scripts\Activate    # (Windows)
+# source venv/bin/activate  # (Mac/Linux)
+python -m pip install -r requirements.txt
+python manage.py migrate
+python manage.py runserver
+
 WebSockets via Django Channels
 `pip install django djangorestframework djangorestframework-simplejwt channels channels-redis redis`
+
 PostgreSQL
 `pip install psycopg2-binary`
 ASGI server for dev:
 `pip install daphne`
 
+
+
 ### Frontend
-`npm create vite@latest FOLDER -- --template react`
-`npm install`
+cd frontend
+npm install
+npm run dev
+
+project structure:
+VThax13-coding-1v1/
+├── frontend/          # React + Vite app
+├── backend/           # Django project
+│   ├── core/          # Global settings
+│   ├── game/          # Example app (API endpoints)
+│   └── venv/          # Python virtual environment
+└── README.md
