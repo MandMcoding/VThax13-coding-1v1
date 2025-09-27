@@ -1,43 +1,126 @@
-/* Global dark theme */
-body {
-  margin: 0;
-  background-color: #0f172a; /* dark slate */
-  color: #f9fafb;           /* near white text */
-  font-family: "Times New Roman", serif;
-}
-
-/* Top navigation bar */
-.top-nav {
+/* General */
+.home-wrapper {
+  background: linear-gradient(180deg, #000000, #0a0a0a);
+  color: #e5e5e5;
+  font-family: "Inter", "Segoe UI", Arial, sans-serif;
+  min-height: 100vh;
   display: flex;
-  justify-content: flex-end;
-  padding: 1rem 2rem;
-  background: #1e293b; /* darker gray-blue nav background */
-  border-bottom: 1px solid #334155;
+  flex-direction: column;
 }
 
-.top-nav a {
-  margin-left: 1.5rem;
+/* Navbar */
+.navbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 3rem;
+  background: rgba(20, 20, 20, 0.8);
+  border-radius: 12px;
+  margin: 1rem 2rem;
+}
+
+.logo-img {
+  height: 40px;
+  width: auto;
+}
+
+.navbar-links {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.navbar-links a {
   text-decoration: none;
-  color: #f9fafb; /* white text */
+  color: #b3b3b3;
   font-weight: 500;
   transition: color 0.2s ease-in-out;
 }
 
-.top-nav a:hover {
-  color: #22d3ee; /* cyan accent */
+.navbar-links a:hover {
+  color: #1DB954;
 }
 
-/* App header with logo */
-.app-header {
+.btn-signup {
+  background: #1DB954;
+  color: #000000;
+  padding: 0.5rem 1.2rem;
+  border-radius: 8px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.2s ease;
+}
+
+.btn-signup:hover {
+  background: #1aa34a;
+}
+
+/* Hero */
+.hero {
   text-align: center;
-  padding: 1rem 0;
-  border-bottom: 1px solid #334155; /* dark border */
-  background: #0f172a; /* same as body for smoothness */
+  margin-top: 5rem;
+  padding: 2rem;
 }
 
-.app-logo {
-  max-width: 100px; /* control logo size */
-  height: auto;
-  display: block;
-  margin: 0 auto;
+.hero-badge {
+  background: #2e3b33;
+  color: #1DB954;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  display: inline-block;
+  margin-bottom: 1.5rem;
+}
+
+.hero-title {
+  font-size: 3.5rem;
+  font-weight: 800;
+  line-height: 1.2;
+  margin-bottom: 1rem;
+}
+
+.hero-title .highlight {
+  color: #1DB954;
+}
+
+.hero-subtitle {
+  font-size: 1.2rem;
+  color: #b3b3b3;
+  max-width: 700px;
+  margin: 0 auto 2.5rem;
+  line-height: 1.6;
+}
+
+.hero-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.btn-primary,
+.btn-secondary {
+  padding: 0.8rem 1.6rem;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 600;
+  transition: all 0.2s ease-in-out;
+}
+
+.btn-primary {
+  background: #1DB954;
+  color: #000000;
+}
+
+.btn-primary:hover {
+  background: #1aa34a;
+}
+
+.btn-secondary {
+  border: 2px solid #1DB954;
+  color: #1DB954;
+}
+
+.btn-secondary:hover {
+  background: #111111;
 }
