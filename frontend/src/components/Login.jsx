@@ -1,10 +1,13 @@
 import "./auth.css";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom"; // ✅ Step 1: import
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
+
+  const navigate = useNavigate(); // ✅ Step 2: initialize hook
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -21,8 +24,8 @@ export default function LoginPage() {
       if (res.ok) {
         const data = await res.json();
         setMessage(`✅ Login successful! Welcome, ${data.username || email}`);
-        // If backend returns a token, store it:
-        // localStorage.setItem("token", data.token);
+        // localStorage.setItem("token", data.token); // optional: store token
+        setTimeout(() => navigate("/compete"), 1000); // ✅ Step 3: redirect after 1s
       } else {
         const err = await res.json();
         setMessage(`❌ Login failed: ${err.error || "Invalid credentials"}`);

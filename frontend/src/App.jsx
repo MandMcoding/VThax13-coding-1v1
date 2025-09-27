@@ -18,7 +18,7 @@ export default function App() {
           </Link>
         </div>
         <div className="navbar-links">
-          <Link to="/#pricing">Game Modes</Link>
+          <Link to="/compete">Game Modes</Link>
           <Link to="/#faq">FAQ</Link>
           <Link to="/login" className="nav-link">Log In</Link>
           <Link to="/signup" className="btn-signup">Sign Up</Link>
