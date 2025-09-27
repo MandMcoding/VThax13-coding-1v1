@@ -19,6 +19,9 @@ python manage.py runserver
 WebSockets via Django Channels
 `pip install django djangorestframework djangorestframework-simplejwt channels channels-redis redis`
 
+pip install djangorestframework
+pip install django channels channels_redis daphne
+
 PostgreSQL
 `pip install psycopg2-binary`
 ASGI server for dev:
