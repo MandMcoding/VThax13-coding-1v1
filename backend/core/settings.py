@@ -163,3 +163,4 @@ STATIC_URL = "static/"
 # Defaults
 # --------------------------------------------------------------------------------------
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
