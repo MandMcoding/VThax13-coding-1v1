@@ -2,66 +2,94 @@
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from django.db import connection
+from django.db import IntegrityError
 
 from .models import Users
 from .serializers import UsersSerializer
 
+
 class UsersCreateView(generics.CreateAPIView):
     """
-    POST /api/auth/users/
-    Body: { "username": "...", "email": "...", "password": "..." }
-    Writes into User.passwordhash (demo: plain text).
+    POST /api/users/
+    Body:
+      {
+        "fname": "Alice",        # optional
+        "lname": "Johnson",      # optional
+        "username": "alicej",    # required, unique
+        "email": "a@ex.com",     # required, unique
+        "password": "secret",    # required (mapped to passwordhash for demo)
+        "role": "user"           # optional, defaults to "user"
+      }
+    Response: { user_id, username, email, role }
     """
     queryset = Users.objects.all()
     serializer_class = UsersSerializer
 
     def create(self, request, *args, **kwargs):
-        s = self.get_serializer(data=request.data)
-        s.is_valid(raise_exception=True)
+        ser = self.get_serializer(data=request.data)
+        ser.is_valid(raise_exception=True)
 
-        username = s.validated_data.get("username")
-        email    = s.validated_data.get("email")
-        password = s.validated_data.get("password")  # serializer maps to passwordhash
-
-        with connection.cursor() as cur:
-            cur.execute(
-                'INSERT INTO "User" (username, email, passwordhash, role) VALUES (%s, %s, %s, %s) RETURNING user_id',
-                [username, email, password, "user"]
+        try:
+            # Let the serializer do the mapping (password -> passwordhash)
+            user = ser.save()
+        except IntegrityError:
+            # Handle unique constraints (username/email)
+            return Response(
+                {"detail": "Username or email already exists."},
+                status=status.HTTP_409_CONFLICT,
             )
-            user_id = cur.fetchone()[0]
 
+        # Serializer hides password/passwordhash in its to_representation
+        # but we’ll return a compact payload explicitly:
         return Response(
-            {"user_id": user_id, "username": username, "email": email, "role": "user"},
-            status=status.HTTP_201_CREATED
+            {
+                "user_id": user.user_id,
+                "username": user.username,
+                "email": user.email,
+                "role": user.role,
+            },
+            status=status.HTTP_201_CREATED,
         )
+
 
 class LoginView(APIView):
     """
-    POST /api/auth/login/
+    POST /api/login/
     Body: { "email": "...", "password": "..." }
+    For the demo we compare against Users.passwordhash directly.
     """
-    authentication_classes = []
-    permission_classes = []
+    authentication_classes = []  # no auth required to hit login
+    permission_classes = []      # open endpoint
 
     def post(self, request):
         email = request.data.get("email")
         password = request.data.get("password")
+
         if not email or not password:
-            return Response({"error": "Email and password required"}, status=400)
-
-        with connection.cursor() as cur:
-            cur.execute(
-                'SELECT user_id, username, role FROM "User" WHERE email=%s AND passwordhash=%s',
-                [email, password]
+            return Response(
+                {"detail": "Email and password are required."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            row = cur.fetchone()
 
-        if not row:
-            return Response({"error": "Invalid credentials"}, status=401)
+        user = (
+            Users.objects
+            .filter(email=email, passwordhash=password)
+            .only("user_id", "username", "role", "email")
+            .first()
+        )
 
-        user_id, username, role = row
+        if not user:
+            return Response({"detail": "Invalid credentials."}, status=401)
+
+        # Return a simple payload (no JWT for the demo)
         return Response(
-            {"message": "Login successful", "user_id": user_id, "username": username, "role": role, "token": "demo-token"},
-            status=200
+            {
+                "success": True,
+                "user_id": user.user_id,
+                "username": user.username,
+                "email": user.email,
+                "role": user.role,
+                "token": "demo-token",  # placeholder if your frontend expects a token
+            },
+            status=200,
         )
