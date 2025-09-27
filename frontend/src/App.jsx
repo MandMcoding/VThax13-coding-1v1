@@ -3,6 +3,7 @@ import HomePage from "./components/home.jsx";
 import CompetePage from "./compete/compete.jsx";
 import SignupPage from "./components/Signup.jsx";
 import LoginPage from "./components/Login.jsx";
+import MCQPage from "./components/mcq.jsx";
 import logo from "./assets/logo.png";
 import "./components/home.css"; // reuse navbar styles
 
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="/compete" element={<CompetePage />} />
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/compete/mcq" element={<MCQPage />} />
       </Routes>
     </div>
   );

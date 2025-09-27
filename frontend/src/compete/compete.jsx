@@ -1,5 +1,6 @@
 import "./compete.css";
 import { Link } from "react-router-dom";
+import MCQPage from "../components/mcq.jsx"
 
 export default function CompetePage() {
   return (
