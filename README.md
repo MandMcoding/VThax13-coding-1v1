@@ -29,6 +29,7 @@ ASGI server for dev:
 ### Frontend
 cd frontend
 npm install
+npm install react-router-dom
 npm run dev
 
 project structure:
