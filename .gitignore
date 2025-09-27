@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+
+# Django / project
+db.sqlite3
+*.log
+media/
+staticfiles/
+
+# Node
+node_modules/
+
+# Editors/OS
+.vscode/
+.idea/
+.DS_Store
