@@ -6,8 +6,8 @@
 }
 
 body {
-  font-family: "Times New Roman", serif;
-  background: #ffffff;
-  color: #111111;
-  line-height: 1.5;
+  margin: 0;
+  font-family: "Inter", "Segoe UI", Arial, sans-serif;
+  background: #000000; /* keep global dark */
+  color: #e5e5e5;
 }
