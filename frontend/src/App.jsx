@@ -1,5 +1,6 @@
-import "./home.css";
-import logo from "../assets/logo.png"; // your logo here
+import "./components/home.css";
+import logo from "./assets/logo.png";
+
 
 export default function HomePage() {
   return (
