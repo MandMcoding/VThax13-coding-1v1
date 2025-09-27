@@ -1,62 +1,39 @@
-<<<<<<< HEAD
-import { Routes, Route } from "react-router-dom";
-import HomePage from "./components/home.jsx";   // make sure file name matches
-import CompetePage from "./compete/page.jsx";
-import logo from "./assets/logo.png";           // put logo.png in src/assets/
-=======
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
-import { Routes, Route, Link } from 'react-router-dom'
-import CompetePage from './compete/page.jsx'
->>>>>>> c20f42f4766516aa074b1a0904f8cfa4269154da
+import "./home.css";
+import logo from "../assets/logo.png"; // your logo here
 
-function App() {
+export default function HomePage() {
   return (
-<<<<<<< HEAD
-    <div className="app-container">
-      {/* Page Routes */}
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/compete" element={<CompetePage />} />
-      </Routes>
+    <div className="home-wrapper">
+      {/* Navbar */}
+      <nav className="navbar">
+        <div className="navbar-left">
+          <img src={logo} alt="CodeComp Logo" className="logo-img" />
+        </div>
+        <div className="navbar-links">
+          <a href="#features">Features</a>
+          <a href="#pricing">Pricing</a>
+          <a href="#faq">FAQ</a>
+          <a href="/login" className="nav-link">Log In</a>
+          <a href="/signup" className="btn-signup">Sign Up</a>
+        </div>
+      </nav>
+
+      {/* Hero Section */}
+      <header className="hero">
+        <span className="hero-badge">🚀 1v1 Coding Battles</span>
+        <h1 className="hero-title">
+          Compete with <span className="highlight">coders</span> &<br />
+          climb the <em>leaderboard</em>
+        </h1>
+        <p className="hero-subtitle">
+          CodeComp makes coding practice exciting. Face off in fast-paced matches, 
+          sharpen your problem-solving, and rise through the ranks.
+        </p>
+        <div className="hero-buttons">
+          <a href="/compete" className="btn-primary">Start Competing</a>
+          <a href="/about" className="btn-secondary">Learn More</a>
+        </div>
+      </header>
     </div>
   );
-=======
-    <>
-      <div>
-        <nav>
-          <Link to="/compete">Compete</Link>
-        </nav>
-
-        <Routes>
-          <Route path="/compete" element={<CompetePage />} />
-        </Routes>
-      </div>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
->>>>>>> c20f42f4766516aa074b1a0904f8cfa4269154da
 }
-
-export default App;
