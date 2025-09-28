@@ -5,30 +5,12 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("game", "0001_initial"),
+        # 👇 Use your actual 0002 filename (without .py)
+        ("game", "0002_match_begin_at_match_countdown_started_at_and_more"),
     ]
 
     operations = [
-        migrations.AddField(
-            model_name="match",
-            name="p1_ready",
-            field=models.BooleanField(default=False),
-        ),
-        migrations.AddField(
-            model_name="match",
-            name="p2_ready",
-            field=models.BooleanField(default=False),
-        ),
-        migrations.AddField(
-            model_name="match",
-            name="countdown_started_at",
-            field=models.DateTimeField(blank=True, null=True),
-        ),
-        migrations.AddField(
-            model_name="match",
-            name="begin_at",
-            field=models.DateTimeField(blank=True, null=True),
-        ),
+        # Add the game mode (mcq|coding)
         migrations.AddField(
             model_name="match",
             name="kind",
@@ -39,6 +21,7 @@ class Migration(migrations.Migration):
             ),
             preserve_default=False,
         ),
+        # Attach the first selected question to the match
         migrations.AddField(
             model_name="match",
             name="first_question",
@@ -50,13 +33,7 @@ class Migration(migrations.Migration):
                 related_name="first_in_matches",
             ),
         ),
-        migrations.AddConstraint(
-            model_name="match",
-            constraint=models.CheckConstraint(
-                name="match_not_self",
-                condition=models.Q(("player1_id", models.F("player2_id")), _negated=True),
-            ),
-        ),
+        # Helpful indexes (optional but nice)
         migrations.AddIndex(
             model_name="match",
             index=models.Index(fields=["status", "created_at"], name="idx_match_status_created"),

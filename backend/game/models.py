@@ -96,24 +96,44 @@ class Match(models.Model):
         ("cancelled", "cancelled"),
     )
 
+    # who
     player1_id = models.IntegerField()
     player2_id = models.IntegerField()
+
+    # which mode (ties to Question.Kind)
+    kind = models.CharField(
+        max_length=6,
+        choices=Question.Kind.choices,
+        default=Question.Kind.MCQ,
+    )
+
+    # status/timestamps
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # ↓ NEW fields for Ready → 3-2-1 → Active
+    # Ready → 3-2-1 → Active
     p1_ready = models.BooleanField(default=False)
     p2_ready = models.BooleanField(default=False)
     countdown_started_at = models.DateTimeField(null=True, blank=True)
     begin_at = models.DateTimeField(null=True, blank=True)
 
+    # first question selected at match creation
+    first_question = models.ForeignKey(
+        Question, null=True, blank=True, on_delete=models.SET_NULL, related_name="first_in_matches"
+    )
+
     class Meta:
-        # Table name stays the default "game_match" to match your existing DB
         constraints = [
             models.CheckConstraint(
                 check=~models.Q(player1_id=models.F("player2_id")),
                 name="match_not_self",
             )
+        ]
+        indexes = [
+            models.Index(fields=["status", "created_at"], name="idx_match_status_created"),
+            models.Index(fields=["player1_id"], name="idx_match_p1"),
+            models.Index(fields=["player2_id"], name="idx_match_p2"),
+            models.Index(fields=["kind"], name="idx_match_kind"),
         ]
 
     # Helpers for views
