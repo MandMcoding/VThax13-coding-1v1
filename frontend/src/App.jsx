@@ -6,6 +6,7 @@ import CompetePage from "./compete/compete.jsx";
 import SignupPage from "./components/Signup.jsx";
 import LoginPage from "./components/Login.jsx";
 import MCQPage from "./components/mcq.jsx";
+import ModelViewer from "./components/ModelViewer.jsx";
 
 import logo from "./assets/logo.png";
 import "./components/home.css"; // reuse navbar styles
@@ -16,9 +17,7 @@ export default function App() {
 
   useEffect(() => {
     const storedUser = localStorage.getItem("username");
-    if (storedUser) {
-      setUsername(storedUser);
-    }
+    if (storedUser) setUsername(storedUser);
   }, []);
 
   const handleLogout = () => {
@@ -39,6 +38,7 @@ export default function App() {
         </div>
         <div className="navbar-links">
           <Link to="/compete">Game Modes</Link>
+          <Link to="/viewer">3D Demo</Link>
           <Link to="/#faq">FAQ</Link>
 
           {username ? (
@@ -62,6 +62,7 @@ export default function App() {
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/compete/mcq" element={<MCQPage />} />
+        <Route path="/viewer" element={<ModelViewer />} />
       </Routes>
     </div>
   );
