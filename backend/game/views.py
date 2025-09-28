@@ -6,7 +6,7 @@ import threading
 import logging
 
 from django.db import transaction, IntegrityError
-from django.db.models import Q
+from django.db.models import Q, F
 from django.db.models.functions import Random
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from .models import Match, Question, MCQ, Coding, GameResult
+from .models import Match, Question, MCQ, Coding, GameResult, EloRating
 
 try:
     from authapp.models import Users  # optional, for usernames
@@ -131,8 +131,7 @@ def _ensure_unanswered_rows(match: Match) -> None:
                     answer={"timeout": True},
                     is_correct=False,
                     elapsed_ms=None,
-                    # managed=False model doesn't auto set default; we can set created_at explicitly in insert paths that need it
-                    created_at=timezone.now(),
+                    created_at=timezone.now(),  # managed=False: set explicitly
                 )
                 logger.info("Inserted timeout row: match=%s player=%s q=%s", match.id, pid, qid)
             except IntegrityError:
@@ -472,7 +471,7 @@ class MatchSubmitAnswerView(APIView):
         logger.info("Submit: match=%s user=%s q=%s ans=%s correct=%s elapsed_ms=%s",
                     m.id, user_id, question_id, answer_index, correct, elapsed_ms)
 
-        # Ensure the used-list includes this q (in case client posted a stale/current id first time)
+        # Ensure the used-list includes this q
         if question_id not in (m.question_ids or []):
             with transaction.atomic():
                 m = Match.objects.select_for_update().get(id=m.id)
@@ -494,7 +493,7 @@ class MatchSubmitAnswerView(APIView):
                         "answer": {"answer_index": answer_index},
                         "is_correct": bool(correct),
                         "elapsed_ms": elapsed_ms,
-                        "created_at": timezone.now(),  # guarantees NOT NULL on DB insert
+                        "created_at": timezone.now(),  # guarantees NOT NULL
                     },
                 )
                 if not created:
@@ -511,24 +510,15 @@ class MatchSubmitAnswerView(APIView):
             logger.exception("Unexpected error writing game_results: %s", e)
             return _no_store(Response({"error": "write failed"}, status=500))
 
-        # Optional ELO bump
+        # ---- ELO bump stored in elo_ratings (not Users)
         elo_delta = 10 if correct else 0
         new_elo = None
         try:
-            from authapp.models import Users  # type: ignore
-            if hasattr(Users, "elo"):
-                user = Users.objects.filter(user_id=user_id).first()
-                if user is not None:
-                    current = getattr(user, "elo", 0) or 0
-                    if elo_delta:
-                        setattr(user, "elo", current + elo_delta)
-                        try:
-                            user.save(update_fields=["elo"])
-                        except Exception:
-                            pass
-                        new_elo = current + elo_delta
-                    else:
-                        new_elo = current
+            rating, _ = EloRating.objects.get_or_create(user_id=user_id, defaults={"elo": 1000})
+            if elo_delta:
+                EloRating.objects.filter(pk=rating.pk).update(elo=F("elo") + elo_delta)
+                rating.refresh_from_db(fields=["elo"])
+            new_elo = rating.elo
         except Exception:
             pass
 
@@ -598,3 +588,41 @@ class MatchResultsView(APIView):
             },
         }
         return _no_store(Response(data))
+
+
+class LeaderboardView(APIView):
+    """
+    GET /api/leaderboard/?limit=50&offset=0
+    Returns top players by ELO with usernames.
+    """
+    def get(self, request):
+        limit = int(request.GET.get("limit", 50))
+        offset = int(request.GET.get("offset", 0))
+
+        rows = list(
+            EloRating.objects
+            .order_by("-elo", "user_id")
+            .values("user_id", "elo")[offset:offset+limit]
+        )
+
+        # Resolve usernames from authapp.Users if available
+        usernames = {}
+        if Users and rows:
+            uids = [r["user_id"] for r in rows]
+            for u in Users.objects.filter(user_id__in=uids).values("user_id", "username"):
+                usernames[u["user_id"]] = u["username"]
+
+        items = []
+        for i, r in enumerate(rows, start=1+offset):
+            items.append({
+                "rank": i,
+                "user_id": r["user_id"],
+                "username": usernames.get(r["user_id"], f"user{r['user_id']}"),
+                "elo": r["elo"],
+            })
+
+        return _no_store(Response({
+            "count": len(items),
+            "offset": offset,
+            "items": items,
+        }))

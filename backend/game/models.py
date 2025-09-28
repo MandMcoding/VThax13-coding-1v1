@@ -253,3 +253,16 @@ class MatchEvent(models.Model):
     class Meta:
         db_table = "match_events"
         indexes = [models.Index(fields=["match", "created_at"], name="idx_event_match_time")]
+
+from django.db import models
+
+class EloRating(models.Model):
+    user_id = models.IntegerField(unique=True, db_index=True)
+    elo = models.IntegerField(default=1000, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "elo_ratings"
+
+    def __str__(self):
+        return f"user {self.user_id} — {self.elo}"
