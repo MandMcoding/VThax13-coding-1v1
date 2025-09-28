@@ -26,7 +26,7 @@ export default function MCQPage() {
   const [question, setQuestion] = useState(null);
   const [selected, setSelected] = useState(null);
   const [locked, setLocked] = useState(false);
-  const [result, setResult] = useState(null); // {correct, elo_delta, new_elo}
+  const [result, setResult] = useState(null); // {correct, elo_delta, new_elo, correct_index?}
   const [loadingNext, setLoadingNext] = useState(false);
 
   // results (when finished)
@@ -265,6 +265,12 @@ export default function MCQPage() {
       );
     }
 
+    // Prefer result.correct_index, else question.correct_index, else null
+    const correctIndex =
+      result && typeof result.correct_index === 'number'
+        ? result.correct_index
+        : (typeof question.correct_index === 'number' ? question.correct_index : null);
+
     return (
       <div className="mcq-question">
         <h2 className="mcq-subtitle">{question.title}</h2>
@@ -277,19 +283,31 @@ export default function MCQPage() {
         </div>
 
         <ul className="mcq-list">
-          {(question.choices || []).map((c, i) => (
-            <li
-              key={i}
-              className={
-                'mcq-choice' +
-                (selected === i ? ' mcq-choice--selected' : '') +
-                (locked ? ' mcq-choice--locked' : '')
-              }
-              onClick={() => submit(i)}
-            >
-              {c}
-            </li>
-          ))}
+          {(question.choices || []).map((c, i) => {
+            const isSelected = selected === i;
+            const isCorrect = locked && correctIndex !== null && i === correctIndex;
+            const isIncorrect = locked && correctIndex !== null && isSelected && i !== correctIndex;
+
+            const choiceClass = [
+              'mcq-choice',
+              isSelected ? 'mcq-choice--selected' : '',
+              locked ? 'mcq-choice--locked' : '',
+              isCorrect ? 'correct' : '',
+              isIncorrect ? 'incorrect' : '',
+            ].join(' ').trim();
+
+            return (
+              <li
+                key={i}
+                className={choiceClass}
+                onClick={() => !locked && submit(i)}
+                aria-disabled={locked}
+                tabIndex={locked ? -1 : 0}
+              >
+                {c}
+              </li>
+            );
+          })}
         </ul>
 
         {loadingNext && <p className="mcq-paragraph">Loading next question…</p>}
