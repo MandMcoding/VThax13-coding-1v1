@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import timedelta
 import threading
 
+from django.db import transaction
 from django.db.models import Q
 from django.db.models.functions import Random
 from django.shortcuts import get_object_or_404
@@ -18,7 +19,6 @@ try:
     from authapp.models import Users  # optional, for usernames
 except Exception:
     Users = None
-
 
 # ---- DEMO-ONLY in-memory queue (single process). Use DB/Redis in prod.
 _queue: list[int] = []
@@ -44,7 +44,21 @@ def _pick_first_question(kind: str) -> Question | None:
     return qs.order_by(Random()).first() if qs.exists() else None
 
 
-def _state(m: Match) -> dict:
+def _state(m: Match, user_id: int | None = None) -> dict:
+    now = timezone.now()
+    countdown_seconds: int | None = None
+    if m.begin_at:
+        delta = (m.begin_at - now).total_seconds()
+        countdown_seconds = int(delta) if delta > 0 else 0
+
+    you_ready = None
+    opponent_ready = None
+    if user_id is not None:
+        if m.player1_id == user_id:
+            you_ready, opponent_ready = m.p1_ready, m.p2_ready
+        elif m.player2_id == user_id:
+            you_ready, opponent_ready = m.p2_ready, m.p1_ready
+
     return {
         "id": m.id,
         "status": m.status,
@@ -55,10 +69,13 @@ def _state(m: Match) -> dict:
         "player2_username": _username(m.player2_id, "Player2"),
         "p1_ready": m.p1_ready,
         "p2_ready": m.p2_ready,
+        "you_ready": you_ready,
+        "opponent_ready": opponent_ready,
         "countdown_started_at": m.countdown_started_at.isoformat() if m.countdown_started_at else None,
         "begin_at": m.begin_at.isoformat() if m.begin_at else None,
+        "countdown_seconds": countdown_seconds,
         "question_id": m.first_question_id,
-        "now": timezone.now().isoformat(),
+        "now": now.isoformat(),
     }
 
 
@@ -78,7 +95,8 @@ class QueueJoinView(APIView):
 
         # Reuse existing pending/active match if any
         existing = Match.objects.only(
-            "id", "player1_id", "player2_id", "status", "created_at", "kind", "first_question_id"
+            "id", "player1_id", "player2_id", "status", "created_at", "kind", "first_question_id",
+            "p1_ready", "p2_ready", "begin_at"
         ).filter(
             Q(player1_id=user_id) | Q(player2_id=user_id),
             status__in=["pending", "active"],
@@ -106,15 +124,17 @@ class QueueJoinView(APIView):
                 b = _queue.pop(0)
 
                 q = _pick_first_question(kind)
-                now = timezone.now()
+                # DO NOT start countdown here — wait for both players to Ready.
                 m = Match.objects.create(
                     player1_id=a,
                     player2_id=b,
                     kind=kind,
                     status="pending",
-                    countdown_started_at=now,
-                    begin_at=now + timedelta(seconds=3),
                     first_question=q,
+                    p1_ready=False,
+                    p2_ready=False,
+                    countdown_started_at=None,
+                    begin_at=None,
                 )
 
                 payload = {
@@ -141,7 +161,8 @@ class QueueCheckView(APIView):
         user_id = int(user_id)
 
         m = Match.objects.only(
-            "id", "player1_id", "player2_id", "status", "created_at", "kind", "first_question_id"
+            "id", "player1_id", "player2_id", "status", "created_at", "kind", "first_question_id",
+            "p1_ready", "p2_ready", "begin_at"
         ).filter(
             Q(player1_id=user_id) | Q(player2_id=user_id),
             status__in=["pending", "active"],
@@ -177,42 +198,61 @@ class QueueLeaveView(APIView):
 
 
 class MatchStateView(APIView):
-    """GET /api/match/<id>/state  -> live state; flips to 'active' once begin_at passes."""
+    """
+    GET /api/match/<match_id>/state?user_id=...
+    Returns match state; also promotes to 'active' once begin_at passed.
+    """
     def get(self, request, match_id: int):
+        user_id = request.GET.get("user_id")
+        user_id = int(user_id) if user_id else None
         m = get_object_or_404(Match, id=match_id)
         m.maybe_promote_to_active()
-        return _no_store(Response(_state(m)))
+        return _no_store(Response(_state(m, user_id)))
 
 
 class MatchReadyView(APIView):
     """
-    POST /api/match/<id>/ready { user_id } -> optional 'Ready' flow
-    Not required if you want auto-start; kept here in case you add a 'Ready' button.
+    POST /api/match/<match_id>/ready
+    Body: { user_id: int, ready: bool }  (ready defaults to true)
     """
     def post(self, request, match_id: int):
         user_id = request.data.get("user_id")
-        if not user_id:
+        ready = request.data.get("ready", True)
+        if user_id is None:
             return _no_store(Response({"error": "user_id required"}, status=400))
         user_id = int(user_id)
+        ready = bool(ready)
 
-        m = get_object_or_404(Match, id=match_id)
-        if user_id not in (m.player1_id, m.player2_id):
-            return _no_store(Response({"error": "not a participant"}, status=403))
+        with transaction.atomic():
+            m = Match.objects.select_for_update().get(id=match_id)
 
-        changed = False
-        if user_id == m.player1_id and not m.p1_ready:
-            m.p1_ready = True; changed = True
-        if user_id == m.player2_id and not m.p2_ready:
-            m.p2_ready = True; changed = True
+            if user_id not in (m.player1_id, m.player2_id):
+                return _no_store(Response({"error": "not a participant"}, status=403))
 
-        if m.start_countdown_if_ready() or changed:
-            m.save()
+            # toggle your ready flag
+            fields = []
+            if m.player1_id == user_id and m.p1_ready != ready:
+                m.p1_ready = ready; fields.append("p1_ready")
+            if m.player2_id == user_id and m.p2_ready != ready:
+                m.p2_ready = ready; fields.append("p2_ready")
 
-        return _no_store(Response(_state(m)))
+            # start countdown once, when both are ready
+            if m.both_ready() and not m.begin_at:
+                now = timezone.now()
+                m.countdown_started_at = now
+                m.begin_at = now + timedelta(seconds=3)
+                fields += ["countdown_started_at", "begin_at"]
+
+            if fields:
+                m.save(update_fields=fields)
+
+        # flip to active if countdown elapsed
+        m.maybe_promote_to_active()
+        return _no_store(Response(_state(m, user_id)))
 
 
 class MatchQuestionView(APIView):
-    """GET /api/match/<id>/question -> first question (no answer leak)."""
+    """GET /api/match/<match_id>/question -> first question (no answer leak)."""
     def get(self, request, match_id: int):
         m = get_object_or_404(Match, id=match_id)
         q = m.first_question
