@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import timedelta
 import threading
 
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.db.models import Q
 from django.db.models.functions import Random
 from django.shortcuts import get_object_or_404
@@ -60,6 +60,9 @@ def _state(m: Match, user_id: int | None = None) -> dict:
         elif m.player2_id == user_id:
             you_ready, opponent_ready = m.p2_ready, m.p1_ready
 
+    # tolerate older model without helper
+    time_left = m.time_left_seconds() if hasattr(m, "time_left_seconds") else None
+
     return {
         "id": m.id,
         "status": m.status,
@@ -74,8 +77,11 @@ def _state(m: Match, user_id: int | None = None) -> dict:
         "opponent_ready": opponent_ready,
         "countdown_started_at": m.countdown_started_at.isoformat() if m.countdown_started_at else None,
         "begin_at": m.begin_at.isoformat() if m.begin_at else None,
-        "countdown_seconds": countdown_seconds,
-        "question_id": m.first_question_id,  # property derived from question_ids[0]
+        "countdown_seconds": countdown_seconds,   # 3..2..1 lobby countdown
+        "time_left_seconds": time_left,           # 60..0 in-match clock
+        "question_id": m.first_question_id,       # derived from question_ids[0]
+        "p1_score": m.p1_score,
+        "p2_score": m.p2_score,
         "now": now.isoformat(),
     }
 
@@ -94,7 +100,7 @@ class QueueJoinView(APIView):
             return _no_store(Response({"error": "user_id required"}, status=400))
         user_id = int(user_id)
 
-        # Reuse existing pending/active match if any (do NOT select 'first_question_id' — it is a property now)
+        # Reuse existing pending/active match if any
         existing = Match.objects.only(
             "id", "player1_id", "player2_id", "status", "created_at", "kind",
             "p1_ready", "p2_ready", "begin_at"
@@ -125,9 +131,9 @@ class QueueJoinView(APIView):
                 b = _queue.pop(0)
 
                 q = _pick_first_question(kind)
-                question_ids = [q.id] if q else []  # you can push more ids here later
+                question_ids = [q.id] if q else []
 
-                # Wait for both players to Ready
+                # Wait for both players to Ready before countdown.
                 m = Match.objects.create(
                     player1_id=a,
                     player2_id=b,
@@ -203,13 +209,15 @@ class QueueLeaveView(APIView):
 class MatchStateView(APIView):
     """
     GET /api/match/<match_id>/state?user_id=...
-    Returns match state; also promotes to 'active' once begin_at passed.
+    Promotes pending->active after begin_at, and auto-finishes when the 60s window expires.
     """
     def get(self, request, match_id: int):
         user_id = request.GET.get("user_id")
         user_id = int(user_id) if user_id else None
         m = get_object_or_404(Match, id=match_id)
         m.maybe_promote_to_active()
+        if hasattr(m, "maybe_finish_if_expired"):
+            m.maybe_finish_if_expired()
         return _no_store(Response(_state(m, user_id)))
 
 
@@ -232,14 +240,13 @@ class MatchReadyView(APIView):
             if user_id not in (m.player1_id, m.player2_id):
                 return _no_store(Response({"error": "not a participant"}, status=403))
 
-            # toggle your ready flag
             fields = []
             if m.player1_id == user_id and m.p1_ready != ready:
                 m.p1_ready = ready; fields.append("p1_ready")
             if m.player2_id == user_id and m.p2_ready != ready:
                 m.p2_ready = ready; fields.append("p2_ready")
 
-            # start countdown once, when both are ready
+            # start 3-second countdown once, when both are ready
             if m.both_ready() and not m.begin_at:
                 now = timezone.now()
                 m.countdown_started_at = now
@@ -249,7 +256,6 @@ class MatchReadyView(APIView):
             if fields:
                 m.save(update_fields=fields)
 
-        # flip to active if countdown elapsed
         m.maybe_promote_to_active()
         return _no_store(Response(_state(m, user_id)))
 
@@ -259,7 +265,6 @@ class MatchQuestionView(APIView):
     def get(self, request, match_id: int):
         m = get_object_or_404(Match, id=match_id)
 
-        # Use property backed by question_ids
         qid = m.first_question_id
         if not qid:
             return _no_store(Response({"error": "no question assigned"}, status=404))
@@ -292,10 +297,10 @@ class MatchQuestionView(APIView):
 class MatchSubmitAnswerView(APIView):
     """
     POST /api/match/<match_id>/submit
-    Body (MCQ): { user_id: int, question_id: int, answer_index: int, elapsed_ms?: int }
+    Body: { user_id: int, question_id: int, answer_index: int, elapsed_ms?: int }
 
-    Saves/updates a per-question result, increments score (once), and
-    auto-finishes the match when both players answered all questions.
+    Validates MCQ and records (upserts) a row in game_results.
+    Also keeps p1_score/p2_score in sync without double counting.
     """
     def post(self, request, match_id: int):
         user_id = request.data.get("user_id")
@@ -304,125 +309,159 @@ class MatchSubmitAnswerView(APIView):
         elapsed_ms = request.data.get("elapsed_ms")
 
         if user_id is None or question_id is None or answer_index is None:
-            return _no_store(Response(
-                {"error": "user_id, question_id, answer_index required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            ))
+            return _no_store(Response({"error": "user_id, question_id, answer_index required"}, status=400))
 
         user_id = int(user_id)
         question_id = int(question_id)
         answer_index = int(answer_index)
         elapsed_ms = int(elapsed_ms) if elapsed_ms is not None else None
 
-        with transaction.atomic():
-            m = Match.objects.select_for_update().get(id=match_id)
+        # Validate question & kind
+        q = get_object_or_404(Question, id=question_id)
+        if q.question_kind != "mcq":
+            return _no_store(Response({"error": "only mcq supported here"}, status=400))
+        try:
+            mcq = q.mcq
+        except MCQ.DoesNotExist:
+            return _no_store(Response({"error": "mcq not found"}, status=404))
+        correct = (answer_index == mcq.answer_index)
 
-            # Only participants can submit
+        with transaction.atomic():
+            # Lock match so score updates are consistent
+            m = Match.objects.select_for_update().get(id=match_id)
             if user_id not in (m.player1_id, m.player2_id):
                 return _no_store(Response({"error": "not a participant"}, status=403))
 
-            # Validate question is part of this match if list provided
-            qids = list(m.question_ids or [])
-            if qids and question_id not in qids:
-                return _no_store(Response({"error": "question not in match"}, status=400))
+            # If match time is over, finish and block further answers.
+            if hasattr(m, "maybe_finish_if_expired") and (m.maybe_finish_if_expired() or m.status == "finished"):
+                return _no_store(Response({"error": "match finished"}, status=409))
 
-            q = get_object_or_404(Question, id=question_id)
-            if q.question_kind != "mcq":
-                return _no_store(Response({"error": "only mcq supported here"}, status=400))
+            # Upsert result; read previous correctness to adjust score
+            prev = GameResult.objects.select_for_update().filter(
+                match=m, player_id=user_id, question=q
+            ).first()
+            prev_correct = bool(prev and prev.is_correct)
 
-            # Correctness
-            try:
-                mcq = q.mcq
-            except MCQ.DoesNotExist:
-                return _no_store(Response({"error": "mcq not found"}, status=404))
+            defaults = {
+                "question_kind": q.question_kind,
+                "answer": {"answer_index": answer_index},
+                "is_correct": bool(correct),
+                "elapsed_ms": elapsed_ms,
+            }
 
-            is_correct = (answer_index == mcq.answer_index)
+            if prev:
+                # update existing
+                for k, v in defaults.items():
+                    setattr(prev, k, v)
+                prev.save(update_fields=list(defaults.keys()))
+                created = False
+            else:
+                GameResult.objects.create(
+                    match=m, player_id=user_id, question=q, **defaults
+                )
+                created = True
 
-            # Upsert result; only increment score if it's the first time
-            # or a change from incorrect -> correct.
-            obj, created = GameResult.objects.get_or_create(
-                match=m,
-                player_id=user_id,
-                question=q,
-                defaults={
-                    "question_kind": q.question_kind,
-                    "answer": {"answer_index": answer_index},
-                    "is_correct": is_correct,
-                    "elapsed_ms": elapsed_ms,
-                },
-            )
+            # Adjust scoreboard if correctness changed
+            if user_id == m.player1_id:
+                if correct and not prev_correct:
+                    m.p1_score += 1
+                elif not correct and prev_correct:
+                    m.p1_score -= 1
+                m.save(update_fields=["p1_score"])
+            else:
+                if correct and not prev_correct:
+                    m.p2_score += 1
+                elif not correct and prev_correct:
+                    m.p2_score -= 1
+                m.save(update_fields=["p2_score"])
 
-            prev_correct = False
-            if not created:
-                prev_correct = bool(obj.is_correct)
-                obj.question_kind = q.question_kind
-                obj.answer = {"answer_index": answer_index}
-                obj.is_correct = is_correct
-                obj.elapsed_ms = elapsed_ms
-                obj.save(update_fields=["question_kind", "answer", "is_correct", "elapsed_ms"])
+        # Optional ELO bump
+        elo_delta = 10 if correct else 0
+        new_elo = None
+        try:
+            from authapp.models import Users  # type: ignore
+            if hasattr(Users, "elo"):
+                user = Users.objects.filter(user_id=user_id).first()
+                if user is not None:
+                    current = getattr(user, "elo", 0) or 0
+                    if elo_delta:
+                        setattr(user, "elo", current + elo_delta)
+                        try:
+                            user.save(update_fields=["elo"])
+                        except Exception:
+                            pass
+                        new_elo = current + elo_delta
+                    else:
+                        new_elo = current
+        except Exception:
+            pass
 
-            # Increment score once per question per player when it becomes correct
-            fields_to_save = []
-            if is_correct and not prev_correct:
-                if user_id == m.player1_id:
-                    m.p1_score = (m.p1_score or 0) + 1
-                    fields_to_save.append("p1_score")
-                else:
-                    m.p2_score = (m.p2_score or 0) + 1
-                    fields_to_save.append("p2_score")
-
-            # Auto-finish when both have answered all questions
-            total = len(qids) if qids else 0
-            if total > 0:
-                ans_p1 = GameResult.objects.filter(match=m, player_id=m.player1_id).count()
-                ans_p2 = GameResult.objects.filter(match=m, player_id=m.player2_id).count()
-                if ans_p1 >= total and ans_p2 >= total and m.status != "finished":
-                    m.status = "finished"
-                    fields_to_save.append("status")
-
-            if fields_to_save:
-                m.save(update_fields=fields_to_save)
-
-        # outside the transaction, return the latest state
-        your_score = m.p1_score if user_id == m.player1_id else m.p2_score
-        opp_score = m.p2_score if user_id == m.player1_id else m.p1_score
-        finished = (m.status == "finished")
+        # If the 60s window just expired after this submit, flip to finished.
+        if hasattr(m, "maybe_finish_if_expired"):
+            m.maybe_finish_if_expired()
 
         return _no_store(Response({
-            "correct": is_correct,
-            "your_score": your_score,
-            "opponent_score": opp_score,
-            "finished": finished,
-            "expected_answers": len(m.question_ids or []),
+            "correct": correct,
+            "elo_delta": elo_delta,
+            "new_elo": new_elo,
+            "time_left_seconds": m.time_left_seconds() if hasattr(m, "time_left_seconds") else None,
+            "p1_score": m.p1_score,
+            "p2_score": m.p2_score,
         }, status=status.HTTP_200_OK))
 
 
+class MatchFinishView(APIView):
+    """
+    POST /api/match/<match_id>/finish
+    Force finish (e.g., when the minute elapses on the client) — idempotent.
+    """
+    def post(self, request, match_id: int):
+        m = get_object_or_404(Match, id=match_id)
+        # Try the timed finish first
+        if hasattr(m, "maybe_finish_if_expired") and not m.maybe_finish_if_expired():
+            if m.status != "finished":
+                # compute scores from stored results just in case
+                p1 = GameResult.objects.filter(match_id=m.id, player_id=m.player1_id, is_correct=True).count()
+                p2 = GameResult.objects.filter(match_id=m.id, player_id=m.player2_id, is_correct=True).count()
+                m.p1_score = p1
+                m.p2_score = p2
+                m.status = "finished"
+                m.save(update_fields=["p1_score", "p2_score", "status"])
+        return _no_store(Response(_state(m)))
+
+
 class MatchResultsView(APIView):
-    """GET /api/match/<match_id>/results -> scoreboard + per-question results."""
+    """
+    GET /api/match/<match_id>/results
+    Returns per-player results and final scores once finished (or live).
+    """
     def get(self, request, match_id: int):
         m = get_object_or_404(Match, id=match_id)
-        results = GameResult.objects.filter(match=m).order_by("created_at")
+        if hasattr(m, "maybe_finish_if_expired"):
+            m.maybe_finish_if_expired()
 
-        items = []
-        for r in results:
-            items.append({
-                "player_id": r.player_id,
-                "question_id": r.question_id,
-                "question_kind": r.question_kind,
-                "answer": r.answer,
-                "is_correct": r.is_correct,
-                "elapsed_ms": r.elapsed_ms,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            })
+        def _rows(pid: int):
+            rows = (GameResult.objects
+                    .filter(match_id=m.id, player_id=pid)
+                    .order_by("created_at")
+                    .values("question_id", "question_kind", "answer", "is_correct", "elapsed_ms", "created_at"))
+            return list(rows)
 
-        return _no_store(Response({
+        data = {
             "match_id": m.id,
             "status": m.status,
             "kind": m.kind,
-            "player1_id": m.player1_id,
-            "player2_id": m.player2_id,
-            "p1_score": m.p1_score,
-            "p2_score": m.p2_score,
-            "expected_answers": len(m.question_ids or []),
-            "results": items,
-        }))
+            "p1": {
+                "player_id": m.player1_id,
+                "username": _username(m.player1_id, "Player1"),
+                "score": m.p1_score,
+                "answers": _rows(m.player1_id),
+            },
+            "p2": {
+                "player_id": m.player2_id,
+                "username": _username(m.player2_id, "Player2"),
+                "score": m.p2_score,
+                "answers": _rows(m.player2_id),
+            },
+        }
+        return _no_store(Response(data))

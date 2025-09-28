@@ -1,3 +1,4 @@
+# game/models.py
 from __future__ import annotations
 from datetime import timedelta
 
@@ -81,6 +82,10 @@ class Coding(models.Model):
         return f"Coding #{self.pk}"
 
 
+# Hard limit for each match after it becomes active
+MATCH_DURATION_SECONDS = 60
+
+
 class Match(models.Model):
     STATUS_CHOICES = (
         ("pending", "pending"),
@@ -102,12 +107,12 @@ class Match(models.Model):
     p1_ready = models.BooleanField(default=False)
     p2_ready = models.BooleanField(default=False)
     countdown_started_at = models.DateTimeField(null=True, blank=True)
-    begin_at = models.DateTimeField(null=True, blank=True)
+    begin_at = models.DateTimeField(null=True, blank=True)  # set after both Ready (+3s)
 
-    # NEW: use JSONB list of question ids (matches your DB column)
-    question_ids = models.JSONField(default=list)  # not null in DB → default=list
+    # JSONB list of question ids (matches DB)
+    question_ids = models.JSONField(default=list)
 
-    # Scores (match your DB: NOT NULL)
+    # Scores (match DB: NOT NULL)
     p1_score = models.IntegerField(default=0)
     p2_score = models.IntegerField(default=0)
 
@@ -141,12 +146,40 @@ class Match(models.Model):
             return True
         return False
 
+    def time_left_seconds(self, duration: int = MATCH_DURATION_SECONDS) -> int | None:
+        """Seconds remaining once match is active; None if not started."""
+        if not self.begin_at:
+            return None
+        remain = int((self.begin_at + timedelta(seconds=duration) - timezone.now()).total_seconds())
+        return max(0, remain)
+
     def maybe_promote_to_active(self) -> bool:
         if self.begin_at and self.status != "active" and timezone.now() >= self.begin_at:
             self.status = "active"
             self.save(update_fields=["status"])
             return True
         return False
+
+    def maybe_finish_if_expired(self, duration: int = MATCH_DURATION_SECONDS) -> bool:
+        """
+        When time is up, compute p1/p2 scores from game_results and finish the match.
+        Safe to call repeatedly (idempotent).
+        """
+        if not self.begin_at or self.status == "finished":
+            return False
+        if timezone.now() < self.begin_at + timedelta(seconds=duration):
+            return False
+
+        from .models import GameResult  # local import to avoid ordering issues
+
+        p1 = GameResult.objects.filter(match_id=self.id, player_id=self.player1_id, is_correct=True).count()
+        p2 = GameResult.objects.filter(match_id=self.id, player_id=self.player2_id, is_correct=True).count()
+
+        self.p1_score = p1
+        self.p2_score = p2
+        self.status = "finished"
+        self.save(update_fields=["p1_score", "p2_score", "status"])
+        return True
 
     # Back-compat helper: first question id from the list
     @property
@@ -159,10 +192,11 @@ class Match(models.Model):
     def __str__(self):
         return f"Match {self.id}: {self.player1_id} vs {self.player2_id} ({self.status})"
 
+
 class GameResult(models.Model):
     """
     ORM mapping for the existing public.game_results table.
-    We mark it managed=False so Django won't try to create/alter it.
+    managed=False so Django won't try to create/alter it.
     """
     match = models.ForeignKey(
         Match,
@@ -184,23 +218,16 @@ class GameResult(models.Model):
     answer = models.JSONField(null=True, blank=True)
     is_correct = models.BooleanField()
     elapsed_ms = models.IntegerField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    # DB column is NOT NULL with default now(); leave nullable here so DB default fills it.
+    created_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "game_results"
         managed = False  # table already exists; don't let Django manage it
-        # Mirrors your DB unique constraint (uniq_result_per_player_q_in_match)
         unique_together = (("match", "player_id", "question"),)
-        # Mirrors your DB indexes (purely declarative here since managed=False)
         indexes = [
-            models.Index(
-                fields=["match", "player_id", "created_at"],
-                name="idx_results_match_player",
-            ),
-            models.Index(
-                fields=["player_id", "created_at"],
-                name="idx_results_player_time",
-            ),
+            models.Index(fields=["match", "player_id", "created_at"], name="idx_results_match_player"),
+            models.Index(fields=["player_id", "created_at"], name="idx_results_player_time"),
         ]
 
     def __str__(self) -> str:
