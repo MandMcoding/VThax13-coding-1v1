@@ -84,16 +84,23 @@ class Coding(models.Model):
 
 # Match model for 1v1 games
 class Match(models.Model):
-    STATUS_CHOICES = (
-        ("pending", "pending"),
-        ("active", "active"),
-        ("finished", "finished"),
-        ("cancelled", "cancelled"),
-    )
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACTIVE = "active", "Active"
+        FINISHED = "finished", "Finished"
+        CANCELLED = "cancelled", "Cancelled"
+
     player1_id = models.IntegerField()
     player2_id = models.IntegerField()
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
 
     def __str__(self):
         return f"Match {self.id}: {self.player1_id} vs {self.player2_id} ({self.status})"
