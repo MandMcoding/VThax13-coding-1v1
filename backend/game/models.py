@@ -1,3 +1,4 @@
+from __future__ import annotations
 from datetime import timedelta
 
 from django.contrib.postgres.indexes import GinIndex
@@ -7,7 +8,6 @@ from django.utils import timezone
 
 
 class Question(models.Model):
-    """Question metadata shared by MCQ and coding problem types."""
     class Difficulty(models.TextChoices):
         EASY = "easy", "Easy"
         MEDIUM = "medium", "Medium"
@@ -33,10 +33,7 @@ class Question(models.Model):
 
 
 class MCQ(models.Model):
-    """Multiple choice questions linked 1-1 to Question."""
-    question = models.OneToOneField(
-        Question, on_delete=models.CASCADE, primary_key=True, related_name="mcq"
-    )
+    question = models.OneToOneField(Question, on_delete=models.CASCADE, primary_key=True, related_name="mcq")
     choices = models.JSONField()
     answer_index = models.PositiveIntegerField()
 
@@ -60,10 +57,7 @@ class MCQ(models.Model):
 
 
 class Coding(models.Model):
-    """Coding questions linked 1-1 to Question."""
-    question = models.OneToOneField(
-        Question, on_delete=models.CASCADE, primary_key=True, related_name="coding"
-    )
+    question = models.OneToOneField(Question, on_delete=models.CASCADE, primary_key=True, related_name="coding")
     template_code = models.TextField()
     prompt = models.TextField()
     test_cases = models.JSONField()
@@ -88,7 +82,6 @@ class Coding(models.Model):
 
 
 class Match(models.Model):
-    """1v1 game match."""
     STATUS_CHOICES = (
         ("pending", "pending"),
         ("active", "active"),
@@ -100,34 +93,27 @@ class Match(models.Model):
     player1_id = models.IntegerField()
     player2_id = models.IntegerField()
 
-    # which mode (ties to Question.Kind)
-    kind = models.CharField(
-        max_length=6,
-        choices=Question.Kind.choices,
-        default=Question.Kind.MCQ,
-    )
+    # mode
+    kind = models.CharField(max_length=6, choices=Question.Kind.choices, default=Question.Kind.MCQ)
 
     # status/timestamps
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     created_at = models.DateTimeField(auto_now_add=True)
-
-    # Ready → 3-2-1 → Active
     p1_ready = models.BooleanField(default=False)
     p2_ready = models.BooleanField(default=False)
     countdown_started_at = models.DateTimeField(null=True, blank=True)
     begin_at = models.DateTimeField(null=True, blank=True)
 
-    # first question selected at match creation
-    first_question = models.ForeignKey(
-        Question, null=True, blank=True, on_delete=models.SET_NULL, related_name="first_in_matches"
-    )
+    # NEW: use JSONB list of question ids (matches your DB column)
+    question_ids = models.JSONField(default=list)  # not null in DB → default=list
+
+    # Scores (match your DB: NOT NULL)
+    p1_score = models.IntegerField(default=0)
+    p2_score = models.IntegerField(default=0)
 
     class Meta:
         constraints = [
-            models.CheckConstraint(
-                check=~models.Q(player1_id=models.F("player2_id")),
-                name="match_not_self",
-            )
+            models.CheckConstraint(check=~models.Q(player1_id=models.F("player2_id")), name="match_not_self"),
         ]
         indexes = [
             models.Index(fields=["status", "created_at"], name="idx_match_status_created"),
@@ -136,7 +122,7 @@ class Match(models.Model):
             models.Index(fields=["kind"], name="idx_match_kind"),
         ]
 
-    # Helpers for views
+    # Helpers
     def side_for(self, user_id: int):
         if self.player1_id == user_id:
             return 1
@@ -148,7 +134,6 @@ class Match(models.Model):
         return self.p1_ready and self.p2_ready
 
     def start_countdown_if_ready(self, seconds: int = 3) -> bool:
-        """Set countdown once, returns True if it changed the model."""
         if self.both_ready() and not self.begin_at:
             now = timezone.now()
             self.countdown_started_at = now
@@ -157,12 +142,19 @@ class Match(models.Model):
         return False
 
     def maybe_promote_to_active(self) -> bool:
-        """Flip to active once begin_at has passed. Returns True if changed."""
         if self.begin_at and self.status != "active" and timezone.now() >= self.begin_at:
             self.status = "active"
             self.save(update_fields=["status"])
             return True
         return False
+
+    # Back-compat helper: first question id from the list
+    @property
+    def first_question_id(self):
+        try:
+            return (self.question_ids or [])[0]
+        except Exception:
+            return None
 
     def __str__(self):
         return f"Match {self.id}: {self.player1_id} vs {self.player2_id} ({self.status})"

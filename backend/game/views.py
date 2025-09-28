@@ -75,7 +75,7 @@ def _state(m: Match, user_id: int | None = None) -> dict:
         "countdown_started_at": m.countdown_started_at.isoformat() if m.countdown_started_at else None,
         "begin_at": m.begin_at.isoformat() if m.begin_at else None,
         "countdown_seconds": countdown_seconds,
-        "question_id": m.first_question_id,
+        "question_id": m.first_question_id,  # property derived from question_ids[0]
         "now": now.isoformat(),
     }
 
@@ -96,7 +96,7 @@ class QueueJoinView(APIView):
 
         # Reuse existing pending/active match if any
         existing = Match.objects.only(
-            "id", "player1_id", "player2_id", "status", "created_at", "kind", "first_question_id",
+            "id", "player1_id", "player2_id", "status", "created_at", "kind",
             "p1_ready", "p2_ready", "begin_at"
         ).filter(
             Q(player1_id=user_id) | Q(player2_id=user_id),
@@ -111,7 +111,7 @@ class QueueJoinView(APIView):
                 "opponent_id": opp,
                 "opponent_username": _username(opp, "Opponent"),
                 "kind": existing.kind,
-                "question_id": existing.first_question_id,
+                "question_id": existing.first_question_id,  # property
             }))
 
         with _queue_lock:
@@ -125,24 +125,26 @@ class QueueJoinView(APIView):
                 b = _queue.pop(0)
 
                 q = _pick_first_question(kind)
+                question_ids = [q.id] if q else []
+
                 # DO NOT start countdown here — wait for both players to Ready.
                 m = Match.objects.create(
                     player1_id=a,
                     player2_id=b,
                     kind=kind,
                     status="pending",
-                    first_question=q,
                     p1_ready=False,
                     p2_ready=False,
                     countdown_started_at=None,
                     begin_at=None,
+                    question_ids=question_ids,
                 )
 
                 payload = {
                     "status": "matched",
                     "match_id": m.id,
                     "kind": m.kind,
-                    "question_id": m.first_question_id,
+                    "question_id": m.first_question_id,  # property
                 }
                 if user_id == a:
                     payload.update({"opponent_id": b, "opponent_username": _username(b, "PlayerB")})
@@ -162,7 +164,7 @@ class QueueCheckView(APIView):
         user_id = int(user_id)
 
         m = Match.objects.only(
-            "id", "player1_id", "player2_id", "status", "created_at", "kind", "first_question_id",
+            "id", "player1_id", "player2_id", "status", "created_at", "kind",
             "p1_ready", "p2_ready", "begin_at"
         ).filter(
             Q(player1_id=user_id) | Q(player2_id=user_id),
@@ -179,7 +181,7 @@ class QueueCheckView(APIView):
             "opponent_id": opp,
             "opponent_username": _username(opp, "Opponent"),
             "kind": m.kind,
-            "question_id": m.first_question_id,
+            "question_id": m.first_question_id,  # property
         }))
 
 
@@ -256,9 +258,13 @@ class MatchQuestionView(APIView):
     """GET /api/match/<match_id>/question -> first question (no answer leak)."""
     def get(self, request, match_id: int):
         m = get_object_or_404(Match, id=match_id)
-        q = m.first_question
-        if not q:
+
+        # Use property backed by question_ids
+        qid = m.first_question_id
+        if not qid:
             return _no_store(Response({"error": "no question assigned"}, status=404))
+
+        q = get_object_or_404(Question, id=qid)
 
         data = {
             "id": q.id,
@@ -290,7 +296,6 @@ class MatchSubmitAnswerView(APIView):
 
     Validates the answer for MCQ questions. Returns
     { correct: bool, elo_delta: int, new_elo: int | None }
-    Note: ELO persistence depends on Users model having an elo-like field.
     """
     def post(self, request, match_id: int):
         user_id = request.data.get("user_id")
@@ -339,7 +344,6 @@ class MatchSubmitAnswerView(APIView):
                     else:
                         new_elo = current
         except Exception:
-            # If Users import or write fails, proceed without persisting elo
             pass
 
         return _no_store(Response({
