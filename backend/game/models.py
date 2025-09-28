@@ -79,12 +79,23 @@ class Coding(models.Model):
     def __str__(self):
         return f"Coding #{self.pk}"
 class Match(models.Model):
-    STATUS_CHOICES = (
-        ("pending", "pending"),
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACTIVE = "active", "Active"
+        FINISHED = "finished", "Finished"
+        CANCELLED = "cancelled", "Cancelled"
+
+    player1_id = models.IntegerField()
+    player2_id = models.IntegerField()
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
     )
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     created_at = models.DateTimeField(auto_now_add=True)
+
     class Meta:
         ordering = ("-created_at",)
+
     def __str__(self):
         return f"Match {self.id}: {self.player1_id} vs {self.player2_id} ({self.status})"
