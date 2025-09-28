@@ -1,9 +1,9 @@
 import "./home.css";
 import { Link } from "react-router-dom";
+import ModelViewer from "./ModelViewer.jsx";
 
 export default function HomePage() {
   return (
-    
     <div className="home-wrapper">
       {/* Hero Section */}
       <header className="hero">
@@ -13,12 +13,22 @@ export default function HomePage() {
           climb the <em>leaderboard</em>
         </h1>
         <p className="hero-subtitle">
-          CodeComp makes coding practice exciting. Face off in fast-paced matches,
-          sharpen your problem-solving, and rise through the ranks.
+          CodeComp makes coding practice exciting. Face off in fast-paced
+          matches, sharpen your problem-solving, and rise through the ranks.
         </p>
+
+        {/* Rotating Gloves 3D Model */}
+        <div className="gloves-container">
+          <ModelViewer />
+        </div>
+
         <div className="hero-buttons">
-          <a href="/compete" className="btn-primary">Start Competing</a>
-          <a href="/about" className="btn-secondary">Learn More</a>
+          <a href="/compete" className="btn-primary">
+            Start Competing
+          </a>
+          <a href="/about" className="btn-secondary">
+            Learn More
+          </a>
         </div>
       </header>
     </div>
