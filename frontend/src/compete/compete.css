@@ -1,3 +1,4 @@
+
 .compete-wrapper {
   min-height: 100vh;
   background: linear-gradient(180deg, #000000, #0a0a0a);
@@ -66,4 +67,93 @@
 .compete-card:hover {
   background: #1a1a1a;
   transform: scale(1.05);
+}
+
+/* ===== Leaderboard: card + pretty table ===== */
+.compete-leaderboard {
+  width: 100%;
+  max-width: 900px;
+  margin-top: 3rem;
+}
+
+.compete-leaderboard-title {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: #e5e5e5;
+  margin: 0 0 0.75rem 0.25rem;
+  letter-spacing: 0.3px;
+}
+
+.leaderboard-table-wrapper {
+  background: #111111;
+  border: 2px solid #1DB954;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+}
+
+.leaderboard-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.98rem;
+}
+
+.leaderboard-table thead th {
+  background: #0f0f0f;
+  color: #bfbfbf;
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.leaderboard-table tbody td {
+  padding: 12px 14px;
+  color: #e8e8e8;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  vertical-align: middle;
+}
+
+.leaderboard-table thead th:first-child,
+.leaderboard-table tbody td:first-child {
+  width: 64px;
+}
+
+.leaderboard-table tbody td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.leaderboard-table tbody tr:nth-child(odd) {
+  background: rgba(255,255,255,0.02);
+}
+
+.leaderboard-table tbody tr:hover {
+  background: rgba(29,185,84,0.10);
+  transition: background 120ms ease-in-out;
+}
+
+.lb-row--me {
+  background: rgba(29,185,84,0.16) !important;
+  box-shadow: inset 0 0 0 1px rgba(29,185,84,0.35);
+}
+
+.leaderboard-table tbody tr:nth-child(1) td:first-child::before { content: "🥇 "; }
+.leaderboard-table tbody tr:nth-child(2) td:first-child::before { content: "🥈 "; }
+.leaderboard-table tbody tr:nth-child(3) td:first-child::before { content: "🥉 "; }
+
+.leaderboard-table tbody tr td[colspan="3"] {
+  text-align: center;
+  color: #b3b3b3;
+}
+
+@media (max-width: 520px) {
+  .leaderboard-table thead th,
+  .leaderboard-table tbody td {
+    padding: 10px 12px;
+  }
 }
