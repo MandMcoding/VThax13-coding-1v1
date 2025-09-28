@@ -158,3 +158,50 @@ class Match(models.Model):
 
     def __str__(self):
         return f"Match {self.id}: {self.player1_id} vs {self.player2_id} ({self.status})"
+
+class GameResult(models.Model):
+    """
+    ORM mapping for the existing public.game_results table.
+    We mark it managed=False so Django won't try to create/alter it.
+    """
+    match = models.ForeignKey(
+        Match,
+        on_delete=models.CASCADE,
+        db_column="match_id",
+        related_name="results",
+    )
+    player_id = models.IntegerField()
+    question = models.ForeignKey(
+        Question,
+        on_delete=models.PROTECT,   # DB has RESTRICT; PROTECT is closest in Django
+        db_column="question_id",
+        related_name="results",
+    )
+    question_kind = models.CharField(
+        max_length=6,
+        choices=Question.Kind.choices,
+    )
+    answer = models.JSONField(null=True, blank=True)
+    is_correct = models.BooleanField()
+    elapsed_ms = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "game_results"
+        managed = False  # table already exists; don't let Django manage it
+        # Mirrors your DB unique constraint (uniq_result_per_player_q_in_match)
+        unique_together = (("match", "player_id", "question"),)
+        # Mirrors your DB indexes (purely declarative here since managed=False)
+        indexes = [
+            models.Index(
+                fields=["match", "player_id", "created_at"],
+                name="idx_results_match_player",
+            ),
+            models.Index(
+                fields=["player_id", "created_at"],
+                name="idx_results_player_time",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Result m{self.match_id} u{self.player_id} q{self.question_id} ({'✓' if self.is_correct else '✗'})"
