@@ -23,8 +23,9 @@ export default function LoginPage() {
 
       if (res.ok) {
         const data = await res.json();
+        localStorage.setItem("username", data.username); // <-- add this line
+        localStorage.setItem("token", data.token || "demo-token");
         setMessage(`✅ Login successful! Welcome, ${data.username || email}`);
-        // localStorage.setItem("token", data.token); // optional: store token
         setTimeout(() => navigate("/compete"), 1000); // ✅ Step 3: redirect after 1s
       } else {
         const err = await res.json();

@@ -36,7 +36,7 @@ export default function SignupPage() {
           lname,
           email,
           username,
-          passwordhash: password, // WARNING: raw string; backend should hash
+          password: password, // WARNING: raw string; backend should hash
           role,
         }),
       });
