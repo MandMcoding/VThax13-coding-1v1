@@ -33,10 +33,39 @@ export default function MCQPage() {
   const [finalResults, setFinalResults] = useState(null); // payload from /results/
 
   const userId = Number(localStorage.getItem('user_id'));
-  const pollRef = useRef(null);
+  const statePollRef = useRef(null);     // polls /state
+  const queuePollRef = useRef(null);     // polls /queue/check
   const fetchedQuestionRef = useRef(false);
   const finishedRef = useRef(false);
   const questionStartRef = useRef(null); // for elapsed_ms
+
+  // helper: stop all timers
+  const stopAllPolling = () => {
+    if (statePollRef.current) {
+      clearInterval(statePollRef.current);
+      statePollRef.current = null;
+    }
+    if (queuePollRef.current) {
+      clearInterval(queuePollRef.current);
+      queuePollRef.current = null;
+    }
+  };
+
+  // helper: finish and fetch results once
+  const finishAndFetchResults = async (mid) => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    stopAllPolling();
+    try {
+      await fetch(`${API_BASE}/api/match/${mid}/finish/`, { method: 'POST' });
+    } catch {}
+    try {
+      const r = await fetch(`${API_BASE}/api/match/${mid}/results/`);
+      const data = await r.json();
+      setFinalResults(data);
+    } catch {}
+    setStatus('finished');
+  };
 
   // join the queue on mount
   useEffect(() => {
@@ -49,6 +78,27 @@ export default function MCQPage() {
     let cancelled = false;
     setStatus('queued');
     setMsg('Joining queue...');
+
+    const startQueuePolling = () => {
+      queuePollRef.current = setInterval(async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/queue/check/?user_id=${userId}`);
+          const data = await res.json();
+          if (data.status === 'matched') {
+            if (queuePollRef.current) {
+              clearInterval(queuePollRef.current);
+              queuePollRef.current = null;
+            }
+            setKind(data.kind || 'mcq');
+            setStatus('matched');
+            setMatchId(data.match_id);
+            setOpponentId(data.opponent_id);
+            setOpponentUsername(data.opponent_username);
+            setMsg(`Matched with @${data.opponent_username}. Hit Ready!`);
+          }
+        } catch {}
+      }, 1200);
+    };
 
     const joinQueue = async () => {
       try {
@@ -77,36 +127,17 @@ export default function MCQPage() {
       }
     };
 
-    const startQueuePolling = () => {
-      const id = setInterval(async () => {
-        try {
-          const res = await fetch(`${API_BASE}/api/queue/check/?user_id=${userId}`);
-        const data = await res.json();
-          if (data.status === 'matched') {
-            clearInterval(id);
-            setKind(data.kind || 'mcq');
-            setStatus('matched');
-            setMatchId(data.match_id);
-            setOpponentId(data.opponent_id);
-            setOpponentUsername(data.opponent_username);
-            setMsg(`Matched with @${data.opponent_username}. Hit Ready!`);
-          }
-        } catch {}
-      }, 1200);
-    };
-
     joinQueue();
 
     return () => {
       cancelled = true;
+      stopAllPolling();
       // best-effort: leave queue if still queued
-      if (status === 'queued') {
-        fetch(`${API_BASE}/api/queue/leave/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: userId }),
-        }).catch(() => {});
-      }
+      fetch(`${API_BASE}/api/queue/leave/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId }),
+      }).catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
@@ -132,19 +163,7 @@ export default function MCQPage() {
 
         // handle lifecycle
         if (s.status === 'finished' || (typeof s.time_left_seconds === 'number' && s.time_left_seconds <= 0)) {
-          // Finish exactly once; then fetch results
-          if (!finishedRef.current) {
-            finishedRef.current = true;
-            try {
-              await fetch(`${API_BASE}/api/match/${matchId}/finish/`, { method: 'POST' });
-            } catch {}
-            try {
-              const r = await fetch(`${API_BASE}/api/match/${matchId}/results/`);
-              const data = await r.json();
-              setFinalResults(data);
-            } catch {}
-          }
-          setStatus('finished');
+          await finishAndFetchResults(matchId); // clears polls and fetches results
           return;
         }
 
@@ -157,8 +176,7 @@ export default function MCQPage() {
               .then(r => r.json())
               .then(q => {
                 setQuestion(q);
-                // mark question start time for elapsed_ms
-                questionStartRef.current = Date.now();
+                questionStartRef.current = Date.now(); // mark question start
               })
               .catch(() => {});
           }
@@ -171,12 +189,15 @@ export default function MCQPage() {
     };
 
     // start/refresh polling
-    if (pollRef.current) clearInterval(pollRef.current);
+    if (statePollRef.current) clearInterval(statePollRef.current);
     pollOnce(); // immediate
-    pollRef.current = setInterval(pollOnce, 800);
+    statePollRef.current = setInterval(pollOnce, 800);
 
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (statePollRef.current) {
+        clearInterval(statePollRef.current);
+        statePollRef.current = null;
+      }
     };
   }, [matchId, userId]);
 

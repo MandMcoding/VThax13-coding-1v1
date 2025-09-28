@@ -232,3 +232,24 @@ class GameResult(models.Model):
 
     def __str__(self) -> str:
         return f"Result m{self.match_id} u{self.player_id} q{self.question_id} ({'✓' if self.is_correct else '✗'})"
+
+# game/models.py (add at bottom, after GameResult)
+
+class MatchEvent(models.Model):
+    class Kind(models.TextChoices):
+        MATCHED = "matched", "Matched"
+        READY = "ready", "Ready toggled"
+        COUNTDOWN = "countdown_started", "Countdown started"
+        ACTIVATED = "activated", "Match activated"
+        ANSWER = "answer", "Answer submitted"
+        FINISHED = "finished", "Match finished"
+
+    match = models.ForeignKey("Match", on_delete=models.CASCADE, related_name="events")
+    actor_id = models.IntegerField(null=True, blank=True)   # user who caused it (if any)
+    event = models.CharField(max_length=32, choices=Kind.choices)
+    payload = models.JSONField(null=True, blank=True)       # any extra context
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "match_events"
+        indexes = [models.Index(fields=["match", "created_at"], name="idx_event_match_time")]

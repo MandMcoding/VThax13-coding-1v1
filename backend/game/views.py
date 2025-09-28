@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 import threading
+import logging
 
 from django.db import transaction, IntegrityError
 from django.db.models import Q
@@ -21,7 +22,9 @@ try:
 except Exception:
     Users = None
 
-# ---- DEMO-ONLY in-memory queue (single process). Use DB/Redis in prod.
+logger = logging.getLogger(__name__)
+
+# ---- DEMO-ONLY in-memory queue (single process)
 _queue: list[int] = []
 _queue_lock = threading.Lock()
 
@@ -45,6 +48,73 @@ def _pick_first_question(kind: str) -> Question | None:
     return qs.order_by(Random()).first() if qs.exists() else None
 
 
+def _ensure_question_assigned(m: Match, kind: str | None = None) -> bool:
+    """
+    Ensure match has at least one question in question_ids.
+    Returns True if we assigned one now.
+    """
+    if (m.question_ids or []):
+        return False
+    k = (kind or m.kind or "mcq").lower()
+    q = _pick_first_question(k)
+    if not q:
+        logger.warning("No questions available for kind=%s; match=%s", k, m.id)
+        return False
+    m.question_ids = [q.id]
+    m.save(update_fields=["question_ids"])
+    logger.info("Assigned question %s to match %s", q.id, m.id)
+    return True
+
+
+def _finalize_scores(match: Match) -> None:
+    """Compute p1/p2 scores from game_results and store on Match."""
+    p1 = GameResult.objects.filter(match_id=match.id, player_id=match.player1_id, is_correct=True).count()
+    p2 = GameResult.objects.filter(match_id=match.id, player_id=match.player2_id, is_correct=True).count()
+    if match.p1_score != p1 or match.p2_score != p2 or match.status != "finished":
+        match.p1_score = p1
+        match.p2_score = p2
+        match.status = "finished"
+        match.save(update_fields=["p1_score", "p2_score", "status"])
+        logger.info("Match %s finalized: p1_score=%s p2_score=%s", match.id, p1, p2)
+
+
+def _ensure_unanswered_rows(match: Match) -> None:
+    """
+    For every question in match.question_ids, ensure both players have a row.
+    If missing, insert a 'timeout' incorrect row so game_results reflects the game.
+    """
+    qids = (match.question_ids or [])[:]
+    if not qids:
+        logger.info("Match %s has no questions; no unanswered rows to insert", match.id)
+        return
+    for pid in (match.player1_id, match.player2_id):
+        existing = set(
+            GameResult.objects.filter(match_id=match.id, player_id=pid)
+            .values_list("question_id", flat=True)
+        )
+        missing = [qid for qid in qids if qid not in existing]
+        for qid in missing:
+            q = Question.objects.filter(id=qid).only("id", "question_kind").first()
+            if not q:
+                continue
+            try:
+                GameResult.objects.create(
+                    match=match,
+                    player_id=pid,
+                    question=q,
+                    question_kind=q.question_kind,
+                    answer={"timeout": True},
+                    is_correct=False,
+                    elapsed_ms=None,
+                )
+                logger.info("Inserted timeout row: match=%s player=%s q=%s", match.id, pid, qid)
+            except IntegrityError:
+                pass
+            except Exception as e:
+                logger.exception("Failed inserting timeout row for match=%s player=%s q=%s: %s",
+                                 match.id, pid, qid, e)
+
+
 def _state(m: Match, user_id: int | None = None) -> dict:
     now = timezone.now()
     countdown_seconds: int | None = None
@@ -60,9 +130,6 @@ def _state(m: Match, user_id: int | None = None) -> dict:
         elif m.player2_id == user_id:
             you_ready, opponent_ready = m.p2_ready, m.p1_ready
 
-    # tolerate older model without helper
-    time_left = m.time_left_seconds() if hasattr(m, "time_left_seconds") else None
-
     return {
         "id": m.id,
         "status": m.status,
@@ -77,9 +144,9 @@ def _state(m: Match, user_id: int | None = None) -> dict:
         "opponent_ready": opponent_ready,
         "countdown_started_at": m.countdown_started_at.isoformat() if m.countdown_started_at else None,
         "begin_at": m.begin_at.isoformat() if m.begin_at else None,
-        "countdown_seconds": countdown_seconds,   # 3..2..1 lobby countdown
-        "time_left_seconds": time_left,           # 60..0 in-match clock
-        "question_id": m.first_question_id,       # derived from question_ids[0]
+        "countdown_seconds": countdown_seconds,
+        "time_left_seconds": m.time_left_seconds() if hasattr(m, "time_left_seconds") else None,
+        "question_id": m.first_question_id,
         "p1_score": m.p1_score,
         "p2_score": m.p2_score,
         "now": now.isoformat(),
@@ -87,12 +154,6 @@ def _state(m: Match, user_id: int | None = None) -> dict:
 
 
 class QueueJoinView(APIView):
-    """
-    POST body: { "user_id": 123, "kind": "mcq" | "coding" }
-    Returns:
-      - {status:"queued"} OR
-      - {status:"matched", match_id, opponent_id, opponent_username, kind, question_id}
-    """
     def post(self, request):
         user_id = request.data.get("user_id")
         kind = (request.data.get("kind") or "mcq").lower()
@@ -100,7 +161,6 @@ class QueueJoinView(APIView):
             return _no_store(Response({"error": "user_id required"}, status=400))
         user_id = int(user_id)
 
-        # Reuse existing pending/active match if any
         existing = Match.objects.only(
             "id", "player1_id", "player2_id", "status", "created_at", "kind",
             "p1_ready", "p2_ready", "begin_at"
@@ -117,23 +177,19 @@ class QueueJoinView(APIView):
                 "opponent_id": opp,
                 "opponent_username": _username(opp, "Opponent"),
                 "kind": existing.kind,
-                "question_id": existing.first_question_id,  # property
+                "question_id": existing.first_question_id,
             }))
 
         with _queue_lock:
             if user_id in _queue:
                 return _no_store(Response({"status": "queued"}))
-
             _queue.append(user_id)
 
             if len(_queue) >= 2:
                 a = _queue.pop(0)
                 b = _queue.pop(0)
-
                 q = _pick_first_question(kind)
                 question_ids = [q.id] if q else []
-
-                # Wait for both players to Ready before countdown.
                 m = Match.objects.create(
                     player1_id=a,
                     player2_id=b,
@@ -145,12 +201,13 @@ class QueueJoinView(APIView):
                     begin_at=None,
                     question_ids=question_ids,
                 )
+                logger.info("Match %s created: players=%s vs %s kind=%s qids=%s", m.id, a, b, kind, question_ids)
 
                 payload = {
                     "status": "matched",
                     "match_id": m.id,
                     "kind": m.kind,
-                    "question_id": m.first_question_id,  # property
+                    "question_id": m.first_question_id,
                 }
                 if user_id == a:
                     payload.update({"opponent_id": b, "opponent_username": _username(b, "PlayerB")})
@@ -162,7 +219,6 @@ class QueueJoinView(APIView):
 
 
 class QueueCheckView(APIView):
-    """GET ?user_id=123  -> matched match (if any)"""
     def get(self, request):
         user_id = request.GET.get("user_id")
         if not user_id:
@@ -187,12 +243,11 @@ class QueueCheckView(APIView):
             "opponent_id": opp,
             "opponent_username": _username(opp, "Opponent"),
             "kind": m.kind,
-            "question_id": m.first_question_id,  # property
+            "question_id": m.first_question_id,
         }))
 
 
 class QueueLeaveView(APIView):
-    """POST {user_id}  -> remove from in-memory queue"""
     def post(self, request):
         user_id = request.data.get("user_id")
         if not user_id:
@@ -207,25 +262,28 @@ class QueueLeaveView(APIView):
 
 
 class MatchStateView(APIView):
-    """
-    GET /api/match/<match_id>/state?user_id=...
-    Promotes pending->active after begin_at, and auto-finishes when the 60s window expires.
-    """
     def get(self, request, match_id: int):
         user_id = request.GET.get("user_id")
         user_id = int(user_id) if user_id else None
         m = get_object_or_404(Match, id=match_id)
-        m.maybe_promote_to_active()
-        if hasattr(m, "maybe_finish_if_expired"):
-            m.maybe_finish_if_expired()
+
+        changed = m.maybe_promote_to_active()
+        if changed:
+            logger.info("Match %s promoted to active", m.id)
+            # Make sure a question is assigned once we go active
+            _ensure_question_assigned(m)
+
+        # If the minute expired, finish + fill unanswered + finalize scores.
+        if m.maybe_finish_if_expired():
+            logger.info("Match %s expired; finalizing", m.id)
+            _ensure_question_assigned(m)
+            _ensure_unanswered_rows(m)
+            _finalize_scores(m)
+
         return _no_store(Response(_state(m, user_id)))
 
 
 class MatchReadyView(APIView):
-    """
-    POST /api/match/<match_id>/ready
-    Body: { user_id: int, ready: bool }  (ready defaults to true)
-    """
     def post(self, request, match_id: int):
         user_id = request.data.get("user_id")
         ready = request.data.get("ready", True)
@@ -246,7 +304,6 @@ class MatchReadyView(APIView):
             if m.player2_id == user_id and m.p2_ready != ready:
                 m.p2_ready = ready; fields.append("p2_ready")
 
-            # start 3-second countdown once, when both are ready
             if m.both_ready() and not m.begin_at:
                 now = timezone.now()
                 m.countdown_started_at = now
@@ -255,19 +312,23 @@ class MatchReadyView(APIView):
 
             if fields:
                 m.save(update_fields=fields)
+                logger.info("Match %s ready update by user %s -> p1=%s p2=%s",
+                            m.id, user_id, m.p1_ready, m.p2_ready)
 
         m.maybe_promote_to_active()
         return _no_store(Response(_state(m, user_id)))
 
 
 class MatchQuestionView(APIView):
-    """GET /api/match/<match_id>/question -> first question (no answer leak)."""
     def get(self, request, match_id: int):
         m = get_object_or_404(Match, id=match_id)
 
+        # Assign on-demand if missing
+        if not m.first_question_id:
+            _ensure_question_assigned(m)
         qid = m.first_question_id
         if not qid:
-            return _no_store(Response({"error": "no question assigned"}, status=404))
+            return _no_store(Response({"error": "no question available"}, status=503))
 
         q = get_object_or_404(Question, id=qid)
 
@@ -295,13 +356,6 @@ class MatchQuestionView(APIView):
 
 
 class MatchSubmitAnswerView(APIView):
-    """
-    POST /api/match/<match_id>/submit
-    Body: { user_id: int, question_id: int, answer_index: int, elapsed_ms?: int }
-
-    Validates MCQ and records (upserts) a row in game_results.
-    Also keeps p1_score/p2_score in sync without double counting.
-    """
     def post(self, request, match_id: int):
         user_id = request.data.get("user_id")
         question_id = request.data.get("question_id")
@@ -316,64 +370,48 @@ class MatchSubmitAnswerView(APIView):
         answer_index = int(answer_index)
         elapsed_ms = int(elapsed_ms) if elapsed_ms is not None else None
 
-        # Validate question & kind
+        m = get_object_or_404(Match, id=match_id)
+        if user_id not in (m.player1_id, m.player2_id):
+            return _no_store(Response({"error": "not a participant"}, status=403))
+
+        # If match time is over, finish and block further answers.
+        if m.maybe_finish_if_expired() or m.status == "finished":
+            logger.info("Reject submit: match %s finished", m.id)
+            return _no_store(Response({"error": "match finished"}, status=409))
+
         q = get_object_or_404(Question, id=question_id)
         if q.question_kind != "mcq":
             return _no_store(Response({"error": "only mcq supported here"}, status=400))
+
         try:
             mcq = q.mcq
         except MCQ.DoesNotExist:
             return _no_store(Response({"error": "mcq not found"}, status=404))
+
         correct = (answer_index == mcq.answer_index)
 
-        with transaction.atomic():
-            # Lock match so score updates are consistent
-            m = Match.objects.select_for_update().get(id=match_id)
-            if user_id not in (m.player1_id, m.player2_id):
-                return _no_store(Response({"error": "not a participant"}, status=403))
+        logger.info("Submit: match=%s user=%s q=%s ans=%s correct=%s elapsed_ms=%s",
+                    m.id, user_id, question_id, answer_index, correct, elapsed_ms)
 
-            # If match time is over, finish and block further answers.
-            if hasattr(m, "maybe_finish_if_expired") and (m.maybe_finish_if_expired() or m.status == "finished"):
-                return _no_store(Response({"error": "match finished"}, status=409))
-
-            # Upsert result; read previous correctness to adjust score
-            prev = GameResult.objects.select_for_update().filter(
-                match=m, player_id=user_id, question=q
-            ).first()
-            prev_correct = bool(prev and prev.is_correct)
-
-            defaults = {
-                "question_kind": q.question_kind,
-                "answer": {"answer_index": answer_index},
-                "is_correct": bool(correct),
-                "elapsed_ms": elapsed_ms,
-            }
-
-            if prev:
-                # update existing
-                for k, v in defaults.items():
-                    setattr(prev, k, v)
-                prev.save(update_fields=list(defaults.keys()))
-                created = False
-            else:
-                GameResult.objects.create(
-                    match=m, player_id=user_id, question=q, **defaults
+        try:
+            with transaction.atomic():
+                GameResult.objects.update_or_create(
+                    match=m,
+                    player_id=user_id,
+                    question=q,
+                    defaults={
+                        "question_kind": q.question_kind,
+                        "answer": {"answer_index": answer_index},
+                        "is_correct": bool(correct),
+                        "elapsed_ms": elapsed_ms,
+                    },
                 )
-                created = True
-
-            # Adjust scoreboard if correctness changed
-            if user_id == m.player1_id:
-                if correct and not prev_correct:
-                    m.p1_score += 1
-                elif not correct and prev_correct:
-                    m.p1_score -= 1
-                m.save(update_fields=["p1_score"])
-            else:
-                if correct and not prev_correct:
-                    m.p2_score += 1
-                elif not correct and prev_correct:
-                    m.p2_score -= 1
-                m.save(update_fields=["p2_score"])
+        except IntegrityError as e:
+            logger.warning("IntegrityError writing game_results (match=%s user=%s q=%s): %s",
+                           m.id, user_id, question_id, e)
+        except Exception as e:
+            logger.exception("Unexpected error writing game_results: %s", e)
+            return _no_store(Response({"error": "write failed"}, status=500))
 
         # Optional ELO bump
         elo_delta = 10 if correct else 0
@@ -396,49 +434,49 @@ class MatchSubmitAnswerView(APIView):
         except Exception:
             pass
 
-        # If the 60s window just expired after this submit, flip to finished.
-        if hasattr(m, "maybe_finish_if_expired"):
-            m.maybe_finish_if_expired()
+        # If the 60s window just expired, finish the match now: fill unanswered + finalize scores.
+        if m.maybe_finish_if_expired():
+            _ensure_question_assigned(m)
+            _ensure_unanswered_rows(m)
+            _finalize_scores(m)
 
         return _no_store(Response({
             "correct": correct,
             "elo_delta": elo_delta,
             "new_elo": new_elo,
             "time_left_seconds": m.time_left_seconds() if hasattr(m, "time_left_seconds") else None,
-            "p1_score": m.p1_score,
-            "p2_score": m.p2_score,
         }, status=status.HTTP_200_OK))
 
 
 class MatchFinishView(APIView):
     """
-    POST /api/match/<match_id>/finish
-    Force finish (e.g., when the minute elapses on the client) — idempotent.
+    Force finish — idempotent. Ensures unanswered rows exist, then finalizes scores.
     """
     def post(self, request, match_id: int):
         m = get_object_or_404(Match, id=match_id)
-        # Try the timed finish first
-        if hasattr(m, "maybe_finish_if_expired") and not m.maybe_finish_if_expired():
-            if m.status != "finished":
-                # compute scores from stored results just in case
-                p1 = GameResult.objects.filter(match_id=m.id, player_id=m.player1_id, is_correct=True).count()
-                p2 = GameResult.objects.filter(match_id=m.id, player_id=m.player2_id, is_correct=True).count()
-                m.p1_score = p1
-                m.p2_score = p2
-                m.status = "finished"
-                m.save(update_fields=["p1_score", "p2_score", "status"])
+
+        # Make sure we have a question to log against
+        _ensure_question_assigned(m)
+
+        # If time hasn't expired yet, we still allow manual finish for safety.
+        m.maybe_promote_to_active()
+        m.maybe_finish_if_expired()
+
+        _ensure_unanswered_rows(m)
+        _finalize_scores(m)
+
         return _no_store(Response(_state(m)))
 
 
 class MatchResultsView(APIView):
-    """
-    GET /api/match/<match_id>/results
-    Returns per-player results and final scores once finished (or live).
-    """
     def get(self, request, match_id: int):
         m = get_object_or_404(Match, id=match_id)
-        if hasattr(m, "maybe_finish_if_expired"):
-            m.maybe_finish_if_expired()
+
+        # Ensure we’re finished (and scores reflect rows)
+        if m.maybe_finish_if_expired():
+            _ensure_question_assigned(m)
+            _ensure_unanswered_rows(m)
+            _finalize_scores(m)
 
         def _rows(pid: int):
             rows = (GameResult.objects
