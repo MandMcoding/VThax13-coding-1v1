@@ -23,6 +23,10 @@ export default function MCQPage() {
 
   // question (when active)
   const [question, setQuestion] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [locked, setLocked] = useState(false);
+  const [result, setResult] = useState(null); // {correct, elo_delta, new_elo}
+  const [timeLeft, setTimeLeft] = useState(15);
 
   const userId = Number(localStorage.getItem('user_id'));
   const pollRef = useRef(null);
@@ -146,6 +150,23 @@ export default function MCQPage() {
     };
   }, [matchId, userId]);
 
+  // countdown timer per question when active
+  useEffect(() => {
+    if (status !== 'active' || !question) return;
+    setTimeLeft(15);
+    const id = setInterval(() => {
+      setTimeLeft((t) => {
+        if (t <= 1) {
+          clearInterval(id);
+          setLocked(true);
+          return 0;
+        }
+        return t - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [status, question]);
+
   const toggleReady = async () => {
     if (!matchId || !userId) return;
     const newReady = !youReady;
@@ -177,16 +198,51 @@ export default function MCQPage() {
         </div>
       );
     }
+    const submit = async (i) => {
+      if (locked) return;
+      setSelected(i);
+      setLocked(true);
+      try {
+        const res = await fetch(`${API_BASE}/api/match/${matchId}/submit/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId, question_id: question.id, answer_index: i }),
+        });
+        const data = await res.json();
+        setResult(data);
+      } catch {
+        setResult({ correct: false, elo_delta: 0, new_elo: null });
+      }
+    };
+
     return (
       <div className="mcq-question">
         <h2 className="mcq-subtitle">{question.title}</h2>
         {question.descriptor && <p className="mcq-paragraph">{question.descriptor}</p>}
+        <div className="mcq-timer">Time: {timeLeft}s</div>
         <ul className="mcq-list">
           {(question.choices || []).map((c, i) => (
-            <li key={i} className="mcq-choice">{c}</li>
+            <li
+              key={i}
+              className={
+                'mcq-choice' +
+                (selected === i ? ' mcq-choice--selected' : '') +
+                (locked ? ' mcq-choice--locked' : '')
+              }
+              onClick={() => submit(i)}
+            >
+              {c}
+            </li>
           ))}
         </ul>
-        {/* Hook your answer-submit flow here */}
+        {locked && result && (
+          <p className="mcq-paragraph">
+            {result.correct ? 'Correct! ' : 'Incorrect. '}
+            {typeof result.elo_delta === 'number' && result.elo_delta > 0 && (
+              <>ELO +{result.elo_delta}{result.new_elo ? ` (now ${result.new_elo})` : ''}</>
+            )}
+          </p>
+        )}
       </div>
     );
   };

@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework import status
 
 from .models import Match, Question, MCQ, Coding
 
@@ -280,3 +281,69 @@ class MatchQuestionView(APIView):
                 data["template_code"] = ""
 
         return _no_store(Response(data))
+
+
+class MatchSubmitAnswerView(APIView):
+    """
+    POST /api/match/<match_id>/submit
+    Body: { user_id: int, question_id: int, answer_index: int }
+
+    Validates the answer for MCQ questions. Returns
+    { correct: bool, elo_delta: int, new_elo: int | None }
+    Note: ELO persistence depends on Users model having an elo-like field.
+    """
+    def post(self, request, match_id: int):
+        user_id = request.data.get("user_id")
+        question_id = request.data.get("question_id")
+        answer_index = request.data.get("answer_index")
+
+        if user_id is None or question_id is None or answer_index is None:
+            return _no_store(Response({"error": "user_id, question_id, answer_index required"}, status=400))
+
+        user_id = int(user_id)
+        question_id = int(question_id)
+        answer_index = int(answer_index)
+
+        m = get_object_or_404(Match, id=match_id)
+        if user_id not in (m.player1_id, m.player2_id):
+            return _no_store(Response({"error": "not a participant"}, status=403))
+
+        q = get_object_or_404(Question, id=question_id)
+        if q.question_kind != "mcq":
+            return _no_store(Response({"error": "only mcq supported here"}, status=400))
+
+        try:
+            mcq = q.mcq
+        except MCQ.DoesNotExist:
+            return _no_store(Response({"error": "mcq not found"}, status=404))
+
+        correct = (answer_index == mcq.answer_index)
+
+        elo_delta = 10 if correct else 0
+        new_elo = None
+
+        # Try to update elo if Users model exposes it; otherwise just return delta
+        try:
+            from authapp.models import Users  # type: ignore
+            if hasattr(Users, "elo"):
+                user = Users.objects.filter(user_id=user_id).first()
+                if user is not None:
+                    current = getattr(user, "elo", 0) or 0
+                    if elo_delta:
+                        setattr(user, "elo", current + elo_delta)
+                        try:
+                            user.save(update_fields=["elo"])  # managed False may prevent writes
+                        except Exception:
+                            pass
+                        new_elo = current + elo_delta
+                    else:
+                        new_elo = current
+        except Exception:
+            # If Users import or write fails, proceed without persisting elo
+            pass
+
+        return _no_store(Response({
+            "correct": correct,
+            "elo_delta": elo_delta,
+            "new_elo": new_elo,
+        }, status=status.HTTP_200_OK))
