@@ -106,6 +106,9 @@ def _ensure_unanswered_rows(match: Match) -> None:
                     answer={"timeout": True},
                     is_correct=False,
                     elapsed_ms=None,
+                    # created_at will use DB default now() if your unmanaged model
+                    # field is declared with db_default=Now(). If not, you can set:
+                    # created_at=timezone.now(),
                 )
                 logger.info("Inserted timeout row: match=%s player=%s q=%s", match.id, pid, qid)
             except IntegrityError:
@@ -393,9 +396,10 @@ class MatchSubmitAnswerView(APIView):
         logger.info("Submit: match=%s user=%s q=%s ans=%s correct=%s elapsed_ms=%s",
                     m.id, user_id, question_id, answer_index, correct, elapsed_ms)
 
+        # ---- FIX: ensure created_at is non-null on first insert; only update non-timestamp fields later
         try:
             with transaction.atomic():
-                GameResult.objects.update_or_create(
+                obj, created = GameResult.objects.get_or_create(
                     match=m,
                     player_id=user_id,
                     question=q,
@@ -404,8 +408,17 @@ class MatchSubmitAnswerView(APIView):
                         "answer": {"answer_index": answer_index},
                         "is_correct": bool(correct),
                         "elapsed_ms": elapsed_ms,
+                        "created_at": timezone.now(),  # guarantees NOT NULL on DB insert
                     },
                 )
+                if not created:
+                    # update only mutable fields; do not touch created_at
+                    GameResult.objects.filter(pk=obj.pk).update(
+                        question_kind=q.question_kind,
+                        answer={"answer_index": answer_index},
+                        is_correct=bool(correct),
+                        elapsed_ms=elapsed_ms,
+                    )
         except IntegrityError as e:
             logger.warning("IntegrityError writing game_results (match=%s user=%s q=%s): %s",
                            m.id, user_id, question_id, e)
