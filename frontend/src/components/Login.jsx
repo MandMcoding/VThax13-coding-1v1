@@ -1,3 +1,4 @@
+
 import "./auth.css";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -6,12 +7,10 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
-
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-
     try {
       const res = await fetch("http://127.0.0.1:8000/api/login/", {
         method: "POST",
@@ -20,16 +19,14 @@ export default function LoginPage() {
         },
         body: JSON.stringify({ email, password }),
       });
-
       const data = await res.json();
-
-      if (res.ok && data.success) {
-        // ✅ Save login info for later (queue/match page will use this)
-        localStorage.setItem("user_id", String(data.user_id));
-        localStorage.setItem("username", data.username);
-
+      if (res.ok && (data.success || data.username)) {
+        // Save login info for later (queue/match page will use this)
+        if (data.user_id) localStorage.setItem("user_id", String(data.user_id));
+        if (data.username) localStorage.setItem("username", data.username);
+        if (data.token) localStorage.setItem("token", data.token);
         setMessage(`✅ Login successful! Welcome, ${data.username || email}`);
-        setTimeout(() => navigate("/compete"), 1000); 
+        setTimeout(() => navigate("/compete"), 1000);
       } else {
         setMessage(`❌ Login failed: ${data.detail || "Invalid credentials"}`);
       }

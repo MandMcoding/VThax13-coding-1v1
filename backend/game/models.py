@@ -1,6 +1,7 @@
 from django.contrib.postgres.indexes import GinIndex
 from django.core.exceptions import ValidationError
 from django.db import models
+
 class Question(models.Model):
     """Question metadata shared by MCQ and coding problem types."""
     class Difficulty(models.TextChoices):
@@ -28,6 +29,7 @@ class Question(models.Model):
         ordering = ("-created_at",)
     def __str__(self):
         return f"{self.title} ({self.get_question_kind_display()})"
+
 class MCQ(models.Model):
     """Multiple choice questions linked 1-1 to Question."""
     question = models.OneToOneField(
@@ -53,6 +55,7 @@ class MCQ(models.Model):
         return super().save(*args, **kwargs)
     def __str__(self):
         return f"MCQ #{self.pk}"
+
 class Coding(models.Model):
     """Coding questions linked 1-1 to Question."""
     question = models.OneToOneField(
@@ -78,13 +81,19 @@ class Coding(models.Model):
         return super().save(*args, **kwargs)
     def __str__(self):
         return f"Coding #{self.pk}"
+
+# Match model for 1v1 games
 class Match(models.Model):
     STATUS_CHOICES = (
         ("pending", "pending"),
+        ("active", "active"),
+        ("finished", "finished"),
+        ("cancelled", "cancelled"),
     )
+    player1_id = models.IntegerField()
+    player2_id = models.IntegerField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     created_at = models.DateTimeField(auto_now_add=True)
-    class Meta:
-        ordering = ("-created_at",)
+
     def __str__(self):
         return f"Match {self.id}: {self.player1_id} vs {self.player2_id} ({self.status})"

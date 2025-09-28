@@ -1,14 +1,29 @@
 import "./compete.css";
-import { Link } from "react-router-dom";
-import MCQPage from "../components/mcq.jsx"
+import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 
 export default function CompetePage() {
+  const [username, setUsername] = useState("");
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    const user = localStorage.getItem("username");
+
+    if (!token || !user) {
+      navigate("/login"); // Redirect if not logged in
+    } else {
+      setUsername(user);
+    }
+  }, []);
+
   return (
     <div className="compete-wrapper">
       <header className="compete-hero">
-        <h1 className="compete-title">Choose Your Battle Mode</h1>
+        {/* 👋 Personalized greeting */}
+        <h1 className="compete-title">Hi, {username}, ready to play?</h1>
         <p className="compete-subtitle">
-          Pick a category and challenge opponents in real-time battles.
+          Choose your battle mode and challenge opponents in real-time.
         </p>
       </header>
 

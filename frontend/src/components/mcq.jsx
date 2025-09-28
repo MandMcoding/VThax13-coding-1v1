@@ -1,136 +1,89 @@
-// src/pages/MCQPage.jsx
-import "./mcq.css";
-import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import './mcq.css';
+import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 export default function MCQPage() {
-  const [status, setStatus] = useState("idle"); // idle | queued | matched | error
-  const [opponentId, setOpponentId] = useState(null);
-  const [matchId, setMatchId] = useState(null);
-  const [msg, setMsg] = useState("Waiting for a Match...");
-  const pollRef = useRef(null);
-  const navigate = useNavigate();
+    const [status, setStatus] = useState('idle'); // idle | queued | matched
+    const [opponentUsername, setOpponentUsername] = useState(null);
+    const [msg, setMsg] = useState('Waiting for a Match...');
+    const [matchId, setMatchId] = useState(null);
+    const [opponentId, setOpponentId] = useState(null);
 
-  // Get userId you stored at login (adjust if you used a different key)
-  const userId = Number(localStorage.getItem("user_id"));
-  const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-  const API = `${API_BASE}/api`;
+    // Get userId from localStorage (set at login)
+    const userId = Number(localStorage.getItem('user_id'));
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function join() {
-      if (!userId) {
-        setStatus("error");
-        setMsg("No user id (login first).");
-        return;
-      }
-      setStatus("queued");
-      setMsg("Joining queue…");
-
-      try {
-        const res = await fetch(`${API}/queue/join/`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_id: userId }),
-        });
-        const data = await res.json();
-
-        if (cancelled) return;
-
-        if (data.status === "matched") {
-          setMatchId(data.match_id);
-          setOpponentId(data.opponent_id);
-          setStatus("matched");
-          setMsg("Matched! Redirecting…");
-          // tiny delay so UI shows "Matched!"
-          setTimeout(() => goToMatch(data.match_id, data.opponent_id), 300);
-        } else {
-          setMsg("In queue… searching for opponent.");
-          startPolling();
+    useEffect(() => {
+        if (!userId) {
+            setMsg('No user id (login first).');
+            setStatus('error');
+            return;
         }
-      } catch (e) {
-        setStatus("error");
-        setMsg("Server error while joining queue.");
-      }
-    }
+        setStatus('queued');
+        setMsg('Joining queue...');
+        let cancelled = false;
 
-    join();
-    return () => {
-      cancelled = true;
-      stopPolling();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const startPolling = () => {
-    stopPolling();
-    pollRef.current = setInterval(async () => {
-      try {
-        const res = await fetch(`${API}/queue/check/?user_id=${userId}`);
-        const data = await res.json();
-        if (data.status === "matched") {
-          setMatchId(data.match_id);
-          setOpponentId(data.opponent_id);
-          setStatus("matched");
-          setMsg("Matched! Redirecting…");
-          stopPolling();
-          setTimeout(() => goToMatch(data.match_id, data.opponent_id), 200);
+        async function joinQueue() {
+            try {
+                const res = await fetch(`${API_BASE}/api/queue/join/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: userId }),
+                });
+                const data = await res.json();
+                if (cancelled) return;
+                if (data.status === 'matched') {
+                    setStatus('matched');
+                    setMatchId(data.match_id);
+                    setOpponentId(data.opponent_id);
+                    setOpponentUsername(data.opponent_username);
+                    setMsg(`Matched with @${data.opponent_username}`);
+                } else {
+                    setMsg('In queue… searching for opponent.');
+                    pollForMatch();
+                }
+            } catch (e) {
+                setStatus('error');
+                setMsg('Server error while joining queue.');
+            }
         }
-      } catch {
-        // keep polling; optionally show transient error
-      }
-    }, 1500);
-  };
 
-  const stopPolling = () => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  };
+        async function pollForMatch() {
+            const poll = setInterval(async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/queue/check/?user_id=${userId}`);
+                    const data = await res.json();
+                    if (data.status === 'matched') {
+                        clearInterval(poll);
+                        setStatus('matched');
+                        setMatchId(data.match_id);
+                        setOpponentId(data.opponent_id);
+                        setOpponentUsername(data.opponent_username);
+                        setMsg(`Matched with @${data.opponent_username}`);
+                    }
+                } catch {}
+            }, 1500);
+        }
 
-  const leaveQueue = async () => {
-    stopPolling();
-    try {
-      await fetch(`${API}/queue/leave/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId }),
-      });
-    } catch {}
-    setStatus("idle");
-    setMsg("Left queue.");
-  };
+        joinQueue();
+        return () => {
+            cancelled = true;
+        };
+    }, [userId]);
 
-  const goToMatch = (mId, oppId) => {
-    // pass via router state or query params — here we use state
-    navigate("/compete", { state: { matchId: mId, opponentId: oppId } });
-  };
-
-  return (
-    <div className="mcq-wrapper">
-      <header className="mcq">
-        <span className="mcq-badge">MCQ Battle</span>
-        <h1 className="mcq-subtitle">Step into the Ring</h1>
-        <p className="mcq-paragraph">{msg}</p>
-
-        {status === "queued" && (
-          <button className="btn-primary full-btn" onClick={leaveQueue}>
-            Leave Queue
-          </button>
-        )}
-
-        {status === "error" && (
-          <p className="mcq-paragraph" style={{ color: "red" }}>
-            {msg}
-          </p>
-        )}
-
-        <Link to="/" className="mcq-return">
-          Return
-        </Link>
-      </header>
-    </div>
-  );
+    return (
+        <div className="mcq-wrapper">
+            <header className="mcq">
+                <span className="mcq-badge">MCQ Battle</span>
+                <h1 className="mcq-subtitle">Step into the Ring</h1>
+                <p className="mcq-paragraph">
+                    {msg}
+                </p>
+                <Link to="/compete" className="mcq-return">
+                    Return
+                </Link>
+            </header>
+        </div>
+    );
 }

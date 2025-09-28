@@ -38,7 +38,7 @@ export default function App() {
           </Link>
         </div>
         <div className="navbar-links">
-          <Link to="/compete">How Does It Work?</Link>
+          <Link to="/compete">Game Modes</Link>
           <Link to="/#faq">FAQ</Link>
 
           {username ? (
