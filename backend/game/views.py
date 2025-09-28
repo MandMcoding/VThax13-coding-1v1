@@ -66,6 +66,31 @@ def _ensure_question_assigned(m: Match, kind: str | None = None) -> bool:
     return True
 
 
+def _append_next_question(m: Match) -> Question | None:
+    """
+    Atomically pick a new random question of the match kind that is NOT already in
+    m.question_ids, append it, and return the Question (or None if none left).
+    """
+    with transaction.atomic():
+        m = Match.objects.select_for_update().get(id=m.id)
+        used = list(m.question_ids or [])
+        qs = (
+            Question.objects
+            .filter(question_kind=m.kind)
+            .exclude(id__in=used)
+            .order_by(Random())
+            .only("id", "title", "descriptor", "question_kind")
+        )
+        q = qs.first()
+        if not q:
+            return None
+        if q.id not in used:
+            used.append(q.id)
+            m.question_ids = used
+            m.save(update_fields=["question_ids"])
+        return q
+
+
 def _finalize_scores(match: Match) -> None:
     """Compute p1/p2 scores from game_results and store on Match."""
     p1 = GameResult.objects.filter(match_id=match.id, player_id=match.player1_id, is_correct=True).count()
@@ -106,9 +131,8 @@ def _ensure_unanswered_rows(match: Match) -> None:
                     answer={"timeout": True},
                     is_correct=False,
                     elapsed_ms=None,
-                    # created_at will use DB default now() if your unmanaged model
-                    # field is declared with db_default=Now(). If not, you can set:
-                    # created_at=timezone.now(),
+                    # managed=False model doesn't auto set default; we can set created_at explicitly in insert paths that need it
+                    created_at=timezone.now(),
                 )
                 logger.info("Inserted timeout row: match=%s player=%s q=%s", match.id, pid, qid)
             except IntegrityError:
@@ -273,7 +297,6 @@ class MatchStateView(APIView):
         changed = m.maybe_promote_to_active()
         if changed:
             logger.info("Match %s promoted to active", m.id)
-            # Make sure a question is assigned once we go active
             _ensure_question_assigned(m)
 
         # If the minute expired, finish + fill unanswered + finalize scores.
@@ -358,6 +381,59 @@ class MatchQuestionView(APIView):
         return _no_store(Response(data))
 
 
+class MatchNextQuestionView(APIView):
+    """
+    POST /api/match/<match_id>/next-question
+    Body: { user_id: int }
+    Returns next random question for this match (no repeats).
+    """
+    def post(self, request, match_id: int):
+        user_id = request.data.get("user_id")
+        if user_id is None:
+            return _no_store(Response({"error": "user_id required"}, status=400))
+        user_id = int(user_id)
+
+        m = get_object_or_404(Match, id=match_id)
+
+        if user_id not in (m.player1_id, m.player2_id):
+            return _no_store(Response({"error": "not a participant"}, status=403))
+
+        m.maybe_promote_to_active()
+        if m.status != "active":
+            return _no_store(Response({"error": "match not active"}, status=409))
+        if hasattr(m, "time_left_seconds") and m.time_left_seconds() is not None and m.time_left_seconds() <= 0:
+            return _no_store(Response({"error": "time expired"}, status=409))
+
+        if not m.first_question_id:
+            _ensure_question_assigned(m)
+            q = Question.objects.only("id", "title", "descriptor", "question_kind").get(id=m.first_question_id)
+        else:
+            q = _append_next_question(m)
+
+        if not q:
+            return _no_store(Response({"no_more_questions": True}, status=200))
+
+        data = {
+            "id": q.id,
+            "title": q.title,
+            "descriptor": q.descriptor,
+            "kind": q.question_kind,
+        }
+        if q.question_kind == "mcq":
+            try:
+                data["choices"] = q.mcq.choices
+            except MCQ.DoesNotExist:
+                data["choices"] = []
+        else:
+            try:
+                data["prompt"] = q.coding.prompt
+                data["template_code"] = q.coding.template_code
+            except Coding.DoesNotExist:
+                data["prompt"] = ""
+                data["template_code"] = ""
+        return _no_store(Response(data, status=200))
+
+
 class MatchSubmitAnswerView(APIView):
     def post(self, request, match_id: int):
         user_id = request.data.get("user_id")
@@ -396,7 +472,17 @@ class MatchSubmitAnswerView(APIView):
         logger.info("Submit: match=%s user=%s q=%s ans=%s correct=%s elapsed_ms=%s",
                     m.id, user_id, question_id, answer_index, correct, elapsed_ms)
 
-        # ---- FIX: ensure created_at is non-null on first insert; only update non-timestamp fields later
+        # Ensure the used-list includes this q (in case client posted a stale/current id first time)
+        if question_id not in (m.question_ids or []):
+            with transaction.atomic():
+                m = Match.objects.select_for_update().get(id=m.id)
+                used = list(m.question_ids or [])
+                if question_id not in used:
+                    used.append(question_id)
+                    m.question_ids = used
+                    m.save(update_fields=["question_ids"])
+
+        # Insert/update result, preserving created_at on updates
         try:
             with transaction.atomic():
                 obj, created = GameResult.objects.get_or_create(
@@ -412,7 +498,6 @@ class MatchSubmitAnswerView(APIView):
                     },
                 )
                 if not created:
-                    # update only mutable fields; do not touch created_at
                     GameResult.objects.filter(pk=obj.pk).update(
                         question_kind=q.question_kind,
                         answer={"answer_index": answer_index},
@@ -468,10 +553,7 @@ class MatchFinishView(APIView):
     def post(self, request, match_id: int):
         m = get_object_or_404(Match, id=match_id)
 
-        # Make sure we have a question to log against
         _ensure_question_assigned(m)
-
-        # If time hasn't expired yet, we still allow manual finish for safety.
         m.maybe_promote_to_active()
         m.maybe_finish_if_expired()
 
